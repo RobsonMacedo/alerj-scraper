@@ -414,7 +414,7 @@ def _extract_andamento(soup: BeautifulSoup) -> List[Dict]:
                         date_val = d
                         break
 
-                key = (date_val, c[:60])
+                key = _norm(c[:100])   # só o texto normalizado evita dupl. por data None vs data real
                 if key in seen:
                     continue
                 seen.add(key)
@@ -424,14 +424,21 @@ def _extract_andamento(soup: BeautifulSoup) -> List[Dict]:
     return results
 
 
-# Captura tanto "Distribuicao" quanto "Parecer em Plenario" (onde ficam os pareceres reais).
-# Após o relator, podem existir 0-N segmentos "algo =>" antes de "parecer: tipo".
+# Captura tanto "Distribuicao" quanto "Parecer em Plenario" com relator E parecer preenchido.
 _PAR_TRAM_RE = re.compile(
-    r"(?P<acao>distribuicao|parecer em plenario)\s*=>\s*\S+\s*=>\s*"
+    r"(?P<acao>distribuicao|parecer em plenario|redistribuicao)\s*=>\s*\S+\s*=>\s*"
     r"(?P<comissao>[^=]+?)\s*=>\s*relator:\s*"
     r"(?P<relator>[^=]{1,100}?)\s*=>"
-    r"(?:[^=]{1,200}=>\s*)*"       # pula segmentos intermediários (ex: "Proposição 683/2019 =>")
+    r"(?:[^=]{1,200}=>\s*)*"
     r"parecer:\s*(?P<tipo>[^=]{1,400})",
+    re.IGNORECASE,
+)
+
+# Captura apenas o relator (quando "Parecer:" está vazio ou ausente).
+_REL_TRAM_RE = re.compile(
+    r"(?:distribuicao|parecer em plenario|redistribuicao)\s*=>\s*\S+\s*=>\s*"
+    r"(?P<comissao>[^=]+?)\s*=>\s*relator:\s*"
+    r"(?P<relator>[^=]{1,100})",
     re.IGNORECASE,
 )
 
@@ -439,25 +446,32 @@ _PAR_TRAM_RE = re.compile(
 def _normalize_tipo(tipo: str) -> str:
     """Normaliza o texto do tipo de parecer para uma etiqueta legível."""
     t = tipo.lower().strip()
+    # Favorável — verificar variantes específicas antes do genérico
+    if "favoravel com substitut" in t or ("substitutivo" in t and "favoravel" in t):
+        return "Favorável com Substitutivo"
     if "favoravel com emenda" in t or "favoravel, com emenda" in t:
         return "Favorável com Emendas"
-    if "favoravel com substitut" in t or "substitutivo" in t and "favoravel" in t:
-        return "Favorável com Substitutivo"
     if "favoravel" in t:
         return "Favorável"
+    # Contrário
     if "contrario" in t:
         return "Contrário"
-    if "pela inconstitucionalidade" in t:
+    # Constitucionalidade — verificar variantes com emendas antes do genérico
+    if "inconstitucionalidade com emenda" in t:
+        return "Pela Inconstitucionalidade com Emendas"
+    if "pela inconstitucionalidade" in t or ("inconstitucionalidade" in t and "emenda" not in t):
         return "Pela Inconstitucionalidade"
+    if "constitucionalidade com emenda" in t:
+        return "Pela Constitucionalidade com Emendas"
     if "constitucionalidade" in t:
         return "Pela Constitucionalidade"
+    # Outros
     if "departamento de apoio" in t or "comissoes permanentes" in t:
         return "Aguardando relator"
     if "prejudicado" in t:
         return "Prejudicado"
     if "aprovado" in t:
         return "Aprovado"
-    # Trunca e capitaliza para exibir o texto bruto de forma limpa
     cleaned = tipo.strip()[:80]
     return cleaned[0].upper() + cleaned[1:] if cleaned else tipo
 
@@ -465,13 +479,14 @@ def _normalize_tipo(tipo: str) -> str:
 def _extract_pareceres(soup: BeautifulSoup) -> List[Dict]:
     """
     Extrai pareceres das comissões da tramitação ALERJ.
-    Prioriza 'Parecer em Plenário' sobre 'Distribuição' para a mesma comissão
-    (o plenário tem o parecer final real; a distribuição tem apenas o roteamento inicial).
-    Normaliza o texto para ASCII para tolerar encoding variável do servidor.
+    Passo 1: captura entradas com relator + parecer preenchido.
+    Passo 2: para comissões sem parecer, captura apenas o relator
+             designado (tipo = 'Aguardando parecer').
+    Prioriza 'Parecer em Plenário' sobre 'Distribuição' para a mesma comissão.
     """
-    # chave: comissao_norm → {comissao, relator, tipo_parecer, data, is_plenario}
     results_map: dict = {}
 
+    all_cells_with_date: List[tuple] = []
     for table in soup.find_all("table"):
         for row in table.find_all("tr"):
             cells = [td.get_text(" ", strip=True) for td in row.find_all(["td", "th"])]
@@ -482,32 +497,56 @@ def _extract_pareceres(soup: BeautifulSoup) -> List[Dict]:
                     date_val = d
                     break
             for c in cells:
-                c_norm = _norm(c)
-                m = _PAR_TRAM_RE.search(c_norm)
-                if not m:
-                    continue
+                if "=>" in c and len(c.split("=>")[0].strip()) <= 80:
+                    all_cells_with_date.append((c, date_val))
 
-                acao         = m.group("acao").strip()
-                comissao_n   = m.group("comissao").strip()
-                relator_n    = m.group("relator").strip()
-                tipo_n       = m.group("tipo").strip()
+    # Passo 1: relator + parecer completo
+    for c, date_val in all_cells_with_date:
+        c_norm = _norm(c)
+        m = _PAR_TRAM_RE.search(c_norm)
+        if not m:
+            continue
+        acao       = m.group("acao").strip()
+        comissao_n = m.group("comissao").strip()
+        relator_n  = m.group("relator").strip()
+        tipo_n     = m.group("tipo").strip()
 
-                comissao = _recover_original(c, comissao_n)
-                relator  = _recover_original(c, relator_n)
-                tipo     = _normalize_tipo(tipo_n)
-                is_plen  = "plenario" in acao
+        comissao = _recover_original(c, comissao_n)
+        relator  = _recover_original(c, relator_n)
+        tipo     = _normalize_tipo(tipo_n)
+        is_plen  = "plenario" in acao
 
-                existing = results_map.get(comissao_n)
-                # Prefere "Parecer em Plenário" sobre "Distribuição"
-                if not existing or (is_plen and not existing["is_plen"]):
-                    results_map[comissao_n] = {
-                        "comissao":     comissao,
-                        "relator":      relator,
-                        "tipo_parecer": tipo,
-                        "data":         date_val,
-                        "is_plen":      is_plen,
-                    }
+        existing = results_map.get(comissao_n)
+        if not existing or (is_plen and not existing["is_plen"]):
+            results_map[comissao_n] = {
+                "comissao":     comissao,
+                "relator":      relator,
+                "tipo_parecer": tipo,
+                "data":         date_val,
+                "is_plen":      is_plen,
+            }
 
+    # Passo 2: apenas relator designado (parecer ainda não emitido)
+    for c, date_val in all_cells_with_date:
+        c_norm = _norm(c)
+        m = _REL_TRAM_RE.search(c_norm)
+        if not m:
+            continue
+        comissao_n = m.group("comissao").strip()
+        relator_n  = m.group("relator").strip()
+        if comissao_n in results_map:
+            continue  # já tem dado melhor do passo 1
+        comissao = _recover_original(c, comissao_n)
+        relator  = _recover_original(c, relator_n)
+        results_map[comissao_n] = {
+            "comissao":     comissao,
+            "relator":      relator,
+            "tipo_parecer": "Aguardando parecer",
+            "data":         date_val,
+            "is_plen":      False,
+        }
+
+    # Remove duplicatas da linha do tempo e ordena
     return [
         {k: v for k, v in r.items() if k != "is_plen"}
         for r in results_map.values()

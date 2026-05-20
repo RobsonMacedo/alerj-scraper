@@ -324,16 +324,20 @@ def get_pareceres(comissao=None, relator=None, limit=200) -> List[Dict]:
 
 def _normalize_tipo(tipo: str) -> str:
     t = tipo.lower().strip()
-    if "favoravel com emenda" in t or "favoravel, com emenda" in t:
-        return "Favorável com Emendas"
     if "favoravel com substitut" in t or ("substitutivo" in t and "favoravel" in t):
         return "Favorável com Substitutivo"
+    if "favoravel com emenda" in t or "favoravel, com emenda" in t:
+        return "Favorável com Emendas"
     if "favoravel" in t:
         return "Favorável"
     if "contrario" in t:
         return "Contrário"
-    if "pela inconstitucionalidade" in t:
+    if "inconstitucionalidade com emenda" in t:
+        return "Pela Inconstitucionalidade com Emendas"
+    if "pela inconstitucionalidade" in t or ("inconstitucionalidade" in t and "emenda" not in t):
         return "Pela Inconstitucionalidade"
+    if "constitucionalidade com emenda" in t:
+        return "Pela Constitucionalidade com Emendas"
     if "constitucionalidade" in t:
         return "Pela Constitucionalidade"
     if "departamento de apoio" in t or "comissoes permanentes" in t:
@@ -360,11 +364,17 @@ def get_pareceres_from_andamento(projeto_id: int) -> List[Dict]:
         return _ud.normalize("NFKD", (s or "").lower()).encode("ascii", "ignore").decode("ascii")
 
     PAR_RE = _re.compile(
-        r"(?P<acao>distribuicao|parecer em plenario)\s*=>\s*\S+\s*=>\s*"
+        r"(?P<acao>distribuicao|parecer em plenario|redistribuicao)\s*=>\s*\S+\s*=>\s*"
         r"(?P<comissao>[^=]+?)\s*=>\s*relator:\s*"
         r"(?P<relator>[^=]{1,100}?)\s*=>"
         r"(?:[^=]{1,200}=>\s*)*"
         r"parecer:\s*(?P<tipo>[^=]{1,400})",
+        _re.IGNORECASE,
+    )
+    REL_RE = _re.compile(
+        r"(?:distribuicao|parecer em plenario|redistribuicao)\s*=>\s*\S+\s*=>\s*"
+        r"(?P<comissao>[^=]+?)\s*=>\s*relator:\s*"
+        r"(?P<relator>[^=]{1,100})",
         _re.IGNORECASE,
     )
 
@@ -377,48 +387,60 @@ def get_pareceres_from_andamento(projeto_id: int) -> List[Dict]:
     finally:
         conn.close()
 
+    def _recover(orig: str, target: str) -> str:
+        for extra in range(0, 5):
+            for start in range(len(orig)):
+                for ln in (len(target) + extra, len(target) - extra):
+                    if ln <= 0:
+                        continue
+                    cand = orig[start:start + ln]
+                    if _n(cand) == target:
+                        return cand.strip()
+        return target.upper()
+
     results_map: dict = {}
+
+    # Passo 1: relator + parecer completo
     for row in rows:
         desc = row["descricao"] or ""
         desc_n = _n(desc)
         m = PAR_RE.search(desc_n)
         if not m:
             continue
-
-        acao      = m.group("acao").strip()
-        com_n     = m.group("comissao").strip()
-        rel_n     = m.group("relator").strip()
-        tipo_n    = m.group("tipo").strip()
-        is_plen   = "plenario" in acao
-
-        tipo = _normalize_tipo(tipo_n)
-
-        # Tenta recuperar nomes originais (com acentos) do texto bruto
-        # Heurística: procura fragmento de mesmo comprimento cujo _n() coincide
-        def _recover(orig: str, target: str) -> str:
-            for extra in range(0, 5):
-                for start in range(len(orig)):
-                    for ln in (len(target) + extra, len(target) - extra):
-                        if ln <= 0:
-                            continue
-                        cand = orig[start:start + ln]
-                        if _n(cand) == target:
-                            return cand.strip()
-            return target.upper()
-
+        acao    = m.group("acao").strip()
+        com_n   = m.group("comissao").strip()
+        rel_n   = m.group("relator").strip()
+        tipo_n  = m.group("tipo").strip()
+        is_plen = "plenario" in acao
+        tipo    = _normalize_tipo(tipo_n)
         comissao = _recover(desc, com_n)
         relator  = _recover(desc, rel_n)
         data     = row["data"] or ""
-
         existing = results_map.get(com_n)
         if not existing or (is_plen and not existing["is_plen"]):
             results_map[com_n] = {
-                "comissao":     comissao,
-                "relator":      relator,
-                "tipo_parecer": tipo,
-                "data":         data,
-                "is_plen":      is_plen,
+                "comissao": comissao, "relator": relator,
+                "tipo_parecer": tipo, "data": data, "is_plen": is_plen,
             }
+
+    # Passo 2: apenas relator designado (sem parecer ainda)
+    for row in rows:
+        desc = row["descricao"] or ""
+        desc_n = _n(desc)
+        m = REL_RE.search(desc_n)
+        if not m:
+            continue
+        com_n = m.group("comissao").strip()
+        rel_n = m.group("relator").strip()
+        if com_n in results_map:
+            continue
+        comissao = _recover(desc, com_n)
+        relator  = _recover(desc, rel_n)
+        results_map[com_n] = {
+            "comissao": comissao, "relator": relator,
+            "tipo_parecer": "Aguardando parecer", "data": row["data"] or "",
+            "is_plen": False,
+        }
 
     return [
         {k: v for k, v in r.items() if k != "is_plen"}

@@ -27,7 +27,7 @@ from scraper import ALERJScraper, LOG_FILE, LEGISLATURAS, _extract_pareceres, _e
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def _fetch_tramitacao_ao_vivo(url: str) -> dict:
     """Busca pareceres e andamento diretamente no site da ALERJ. Cache de 30 min."""
     try:
@@ -721,6 +721,12 @@ with tabs[2]:
 
                 # ── Busca ao vivo no site da ALERJ ───────────────────────
                 url_proj = sel_proj.get("url") or ""
+                col_refresh, _ = st.columns([1, 5])
+                with col_refresh:
+                    if st.button("🔄 Atualizar", key=f"refresh_{key_suffix}",
+                                 help="Limpa o cache e rebusca os dados no site da ALERJ"):
+                        _fetch_tramitacao_ao_vivo.clear()
+                        st.rerun()
                 live_data: dict = {}
                 if url_proj:
                     with st.spinner("Buscando dados atualizados no site da ALERJ..."):
