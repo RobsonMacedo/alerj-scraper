@@ -322,6 +322,122 @@ def get_pareceres(comissao=None, relator=None, limit=200) -> List[Dict]:
         conn.close()
 
 
+def _normalize_tipo(tipo: str) -> str:
+    t = tipo.lower().strip()
+    if "favoravel com emenda" in t or "favoravel, com emenda" in t:
+        return "Favorável com Emendas"
+    if "favoravel com substitut" in t or ("substitutivo" in t and "favoravel" in t):
+        return "Favorável com Substitutivo"
+    if "favoravel" in t:
+        return "Favorável"
+    if "contrario" in t:
+        return "Contrário"
+    if "pela inconstitucionalidade" in t:
+        return "Pela Inconstitucionalidade"
+    if "constitucionalidade" in t:
+        return "Pela Constitucionalidade"
+    if "departamento de apoio" in t or "comissoes permanentes" in t:
+        return "Aguardando relator"
+    if "prejudicado" in t:
+        return "Prejudicado"
+    if "aprovado" in t:
+        return "Aprovado"
+    cleaned = tipo.strip()[:80]
+    return cleaned[0].upper() + cleaned[1:] if cleaned else tipo
+
+
+def get_pareceres_from_andamento(projeto_id: int) -> List[Dict]:
+    """
+    Deriva pareceres de comissões diretamente dos registros de andamento.
+    Usado como fonte primária quando a tabela pareceres está vazia.
+    Prioriza entradas 'Parecer em Plenário' (parecer final) sobre 'Distribuição'
+    (roteamento inicial) para a mesma comissão.
+    """
+    import re as _re
+    import unicodedata as _ud
+
+    def _n(s: str) -> str:
+        return _ud.normalize("NFKD", (s or "").lower()).encode("ascii", "ignore").decode("ascii")
+
+    PAR_RE = _re.compile(
+        r"(?P<acao>distribuicao|parecer em plenario)\s*=>\s*\S+\s*=>\s*"
+        r"(?P<comissao>[^=]+?)\s*=>\s*relator:\s*"
+        r"(?P<relator>[^=]{1,100}?)\s*=>"
+        r"(?:[^=]{1,200}=>\s*)*"
+        r"parecer:\s*(?P<tipo>[^=]{1,400})",
+        _re.IGNORECASE,
+    )
+
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT descricao, data FROM andamento WHERE projeto_id=? ORDER BY data",
+            (projeto_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    results_map: dict = {}
+    for row in rows:
+        desc = row["descricao"] or ""
+        desc_n = _n(desc)
+        m = PAR_RE.search(desc_n)
+        if not m:
+            continue
+
+        acao      = m.group("acao").strip()
+        com_n     = m.group("comissao").strip()
+        rel_n     = m.group("relator").strip()
+        tipo_n    = m.group("tipo").strip()
+        is_plen   = "plenario" in acao
+
+        tipo = _normalize_tipo(tipo_n)
+
+        # Tenta recuperar nomes originais (com acentos) do texto bruto
+        # Heurística: procura fragmento de mesmo comprimento cujo _n() coincide
+        def _recover(orig: str, target: str) -> str:
+            for extra in range(0, 5):
+                for start in range(len(orig)):
+                    for ln in (len(target) + extra, len(target) - extra):
+                        if ln <= 0:
+                            continue
+                        cand = orig[start:start + ln]
+                        if _n(cand) == target:
+                            return cand.strip()
+            return target.upper()
+
+        comissao = _recover(desc, com_n)
+        relator  = _recover(desc, rel_n)
+        data     = row["data"] or ""
+
+        existing = results_map.get(com_n)
+        if not existing or (is_plen and not existing["is_plen"]):
+            results_map[com_n] = {
+                "comissao":     comissao,
+                "relator":      relator,
+                "tipo_parecer": tipo,
+                "data":         data,
+                "is_plen":      is_plen,
+            }
+
+    return [
+        {k: v for k, v in r.items() if k != "is_plen"}
+        for r in results_map.values()
+    ]
+
+
+def get_pareceres_projeto(projeto_id: int) -> List[Dict]:
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM pareceres WHERE projeto_id=? ORDER BY data",
+            (projeto_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
 def get_andamentos(projeto_id: int) -> List[Dict]:
     conn = get_connection()
     try:
@@ -360,6 +476,128 @@ def count_projetos() -> int:
     conn = get_connection()
     try:
         return conn.execute("SELECT COUNT(*) FROM projetos").fetchone()[0]
+    finally:
+        conn.close()
+
+
+def split_comissoes(text: str) -> List[str]:
+    """
+    Divide string de comissões preservando vírgulas internas dos nomes.
+    Todo nome de comissão começa com 'Comissão'; divide somente nas vírgulas
+    seguidas de uma nova comissão (começa com 'Comiss').
+
+    Exemplos:
+      "Comissão de Orçamento, Finanças, Fiscalização Financeira e Controle, Comissão de CCJ"
+      → ["Comissão de Orçamento, Finanças, Fiscalização Financeira e Controle", "Comissão de CCJ"]
+    """
+    if not text:
+        return []
+    parts = text.split(", ")
+    result: List[str] = []
+    current = ""
+    for part in parts:
+        stripped = part.strip()
+        if stripped.lower().startswith("comiss"):
+            if current:
+                result.append(current.strip())
+            current = stripped
+        else:
+            current = (current + ", " + stripped) if current else stripped
+    if current:
+        result.append(current.strip())
+    return [c for c in result if c]
+
+
+def get_pareceres_completo(
+    comissao=None, relator=None, legislatura=None, tipo=None, status=None
+) -> List[Dict]:
+    """
+    Retorna uma linha por (projeto, comissão) combinando projetos.comissoes com
+    registros reais de pareceres. Registros sem parecer recebem 'Pendente de parecer'.
+    """
+    import unicodedata
+
+    def _n(s: str) -> str:
+        return unicodedata.normalize("NFKD", (s or "").lower()).encode("ascii", "ignore").decode("ascii")
+
+    conn = get_connection()
+    try:
+        clauses: List[str] = ["comissoes IS NOT NULL", "comissoes != ''"]
+        params: list = []
+        if legislatura:
+            clauses.append("legislatura = ?"); params.append(legislatura)
+        if tipo:
+            clauses.append("tipo = ?"); params.append(tipo)
+
+        proj_rows = conn.execute(
+            f"SELECT id, numero, tipo, legislatura, ano, ementa, autor, situacao, comissoes, url "
+            f"FROM projetos WHERE {' AND '.join(clauses)} ORDER BY id DESC",
+            params,
+        ).fetchall()
+
+        par_rows = conn.execute(
+            "SELECT projeto_id, comissao, relator, tipo_parecer, data FROM pareceres"
+        ).fetchall()
+
+        # Índice: projeto_id -> lista de pareceres
+        par_by_proj: Dict[int, List[Dict]] = {}
+        for p in par_rows:
+            pid = p["projeto_id"]
+            par_by_proj.setdefault(pid, []).append(dict(p))
+
+        result: List[Dict] = []
+        for proj in proj_rows:
+            comissoes_list = split_comissoes(proj["comissoes"] or "")
+            proj_pareceres = par_by_proj.get(proj["id"], [])
+
+            for com in comissoes_list:
+                if comissao and _n(comissao) not in _n(com):
+                    continue
+
+                # Tentativa de match por palavras significativas (≥5 chars)
+                com_n = _n(com)
+                keywords = [w for w in com_n.split() if len(w) >= 5]
+                matching = None
+                for par in proj_pareceres:
+                    par_com_n = _n(par.get("comissao") or "")
+                    if par_com_n and any(kw in par_com_n for kw in keywords):
+                        matching = par
+                        break
+
+                if matching:
+                    rel      = matching.get("relator") or ""
+                    tipo_par = matching.get("tipo_parecer") or "Com parecer"
+                    data_par = matching.get("data") or ""
+                    row_st   = "Com parecer"
+                else:
+                    rel = tipo_par = data_par = ""
+                    tipo_par = "Pendente de parecer"
+                    row_st   = "Pendente de parecer"
+
+                if relator and _n(relator) not in _n(rel):
+                    continue
+                if status == "pendente" and row_st != "Pendente de parecer":
+                    continue
+                if status == "com_parecer" and row_st == "Pendente de parecer":
+                    continue
+
+                result.append({
+                    "numero":       proj["numero"] or "",
+                    "tipo":         proj["tipo"] or "",
+                    "legislatura":  proj["legislatura"] or "",
+                    "ano":          proj["ano"],
+                    "autor":        proj["autor"] or "",
+                    "ementa":       proj["ementa"] or "",
+                    "situacao":     proj["situacao"] or "",
+                    "url":          proj["url"] or "",
+                    "comissao":     com,
+                    "relator":      rel,
+                    "tipo_parecer": tipo_par,
+                    "data":         data_par,
+                    "_status":      row_st,
+                })
+
+        return result
     finally:
         conn.close()
 

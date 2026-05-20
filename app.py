@@ -14,14 +14,32 @@ from typing import Dict, List
 import streamlit as st
 import pandas as pd
 
+import requests as _requests
+from bs4 import BeautifulSoup as _BS
+
 import database as db
-from scraper import ALERJScraper, LOG_FILE, LEGISLATURAS
+from scraper import ALERJScraper, LOG_FILE, LEGISLATURAS, _extract_pareceres, _extract_andamento, HEADERS
 
 # ---------------------------------------------------------------------------
 # Configuração geral
 # ---------------------------------------------------------------------------
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _fetch_tramitacao_ao_vivo(url: str) -> dict:
+    """Busca pareceres e andamento diretamente no site da ALERJ. Cache de 30 min."""
+    try:
+        r = _requests.get(url, timeout=20, headers=HEADERS)
+        soup = _BS(r.content, "lxml")
+        return {
+            "pareceres": _extract_pareceres(soup),
+            "andamento": _extract_andamento(soup),
+            "ok": True,
+        }
+    except Exception as e:
+        return {"pareceres": [], "andamento": [], "ok": False, "erro": str(e)}
 
 db.init_db()
 
@@ -65,6 +83,23 @@ st.markdown("""
                   color:#e6edf3; margin-bottom:8px; }
 .phase-box-ok   { border-left-color:#3fb950; }
 .phase-box-erro { border-left-color:#f85149; }
+.tram-box {
+    background:#0d1117; border:1px solid #30363d; border-radius:6px;
+    padding:6px; max-height:500px; overflow-y:auto;
+    font-family:'Courier New',monospace; font-size:12px; }
+.tram-row {
+    display:flex; border-bottom:1px solid #161b22;
+    padding:3px 6px; gap:8px; align-items:flex-start; }
+.tram-desc  { flex:1; word-break:break-word; }
+.tram-date  { min-width:72px; color:#6e7681; text-align:right; flex-shrink:0; }
+.tram-dist  { color:#58a6ff; }
+.tram-ok    { color:#3fb950; }
+.tram-no    { color:#f85149; }
+.tram-final { color:#ffa657; font-weight:bold; }
+.tram-arch  { color:#6e7681; }
+.tram-def   { color:#c9d1d9; }
+.par-pend   { color:#d29922; }
+.par-ok     { color:#3fb950; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -218,7 +253,6 @@ tabs = st.tabs([
     "📊 Dashboard",
     "🔄 Coletar Dados",
     "📋 Projetos",
-    "⚖️ Pareceres & Relatores",
     "📜 Histórico",
 ])
 
@@ -636,7 +670,7 @@ with tabs[2]:
         st.dataframe(df[show_cols], use_container_width=True, hide_index=True,
                      column_config=_COL_CFG)
 
-        with st.expander("🔍 Ver andamento de um projeto"):
+        with st.expander("📋 Tramitação do projeto"):
             nums = [p.get("numero") or f"#{p['id']}" for p in projetos_page]
             sel_num = st.selectbox("Selecione o projeto:", nums, key=f"sel_{key_suffix}")
             sel_proj = next(
@@ -644,22 +678,147 @@ with tabs[2]:
                  if (p.get("numero") or f"#{p['id']}") == sel_num), None
             )
             if sel_proj:
+                # ── Cabeçalho do projeto ──────────────────────────────────
+                h1, h2 = st.columns(2)
+                with h1:
+                    st.markdown(
+                        f"**{sel_proj.get('tipo','')} {sel_proj.get('numero','')}** "
+                        f"— {sel_proj.get('legislatura','')}"
+                    )
+                    st.markdown(f"**Autor:** {sel_proj.get('autor','—')}")
+                with h2:
+                    st.markdown(f"**Situação:** {sel_proj.get('situacao','—')}")
+                    st.markdown(f"**Apresentado em:** {sel_proj.get('data_apresentacao','—')}")
                 st.markdown(f"**Ementa:** {sel_proj.get('ementa','—')}")
-                st.markdown(
-                    f"**Autor:** {sel_proj.get('autor','—')} | "
-                    f"**Situação:** {sel_proj.get('situacao','—')} | "
-                    f"**Legislatura:** {sel_proj.get('legislatura','—')}"
-                )
                 if sel_proj.get("url"):
                     st.markdown(f"[🔗 Ver no site da ALERJ]({sel_proj['url']})")
-                andamentos = db.get_andamentos(sel_proj["id"])
-                if andamentos:
-                    st.subheader("Andamento")
-                    df_and = pd.DataFrame(andamentos)
-                    show_and = [c for c in ["data", "descricao", "local"] if c in df_and.columns]
-                    st.dataframe(df_and[show_and], use_container_width=True, hide_index=True)
+
+                st.divider()
+
+                # ── Comissões e Pareceres ─────────────────────────────────
+                import unicodedata as _ud
+
+                def _nc(s: str) -> str:
+                    return _ud.normalize("NFKD", (s or "").lower()).encode("ascii", "ignore").decode("ascii")
+
+                def _match_par(com_name: str, pars: list) -> dict:
+                    """Faz matching fuzzy entre nome canônico da comissão e pareceres extraídos."""
+                    # Palavras-chave: ≥5 chars, exclui artigos/preposições comuns
+                    stop = {"comissao", "para", "pelo", "pela", "sobre", "entre", "estado"}
+                    kws = [w for w in _nc(com_name).split() if len(w) >= 5 and w not in stop]
+                    best = None
+                    best_score = 0
+                    for p in pars:
+                        p_com = _nc(p.get("comissao") or "")
+                        score = sum(1 for k in kws if k in p_com)
+                        if score > best_score:
+                            best_score = score
+                            best = p
+                    return best if best_score >= max(1, len(kws) // 2) else None
+
+                comissoes_str = sel_proj.get("comissoes") or ""
+                com_list = db.split_comissoes(comissoes_str)
+
+                # ── Busca ao vivo no site da ALERJ ───────────────────────
+                url_proj = sel_proj.get("url") or ""
+                live_data: dict = {}
+                if url_proj:
+                    with st.spinner("Buscando dados atualizados no site da ALERJ..."):
+                        live_data = _fetch_tramitacao_ao_vivo(url_proj)
+
+                live_pars = live_data.get("pareceres", [])
+                live_ands = live_data.get("andamento", [])
+
+                # Fallback: dados do banco (para quando não há internet)
+                db_pars = db.get_pareceres_projeto(sel_proj["id"])
+                db_pars += db.get_pareceres_from_andamento(sel_proj["id"])
+                db_ands = db.get_andamentos(sel_proj["id"])
+
+                # Prioriza dados ao vivo; usa banco como fallback
+                all_pars = live_pars if live_pars else db_pars
+                all_ands = live_ands if live_ands else [dict(a) for a in db_ands]
+
+                if not live_data.get("ok") and url_proj:
+                    st.warning(f"Não foi possível buscar dados ao vivo: {live_data.get('erro','')}")
+
+                if com_list:
+                    st.markdown("##### Comissões e Pareceres")
+                    com_rows = []
+                    for com in com_list:
+                        par = _match_par(com, all_pars)
+                        if par:
+                            relator  = (par.get("relator") or "").strip() or "—"
+                            tipo_par = par.get("tipo_parecer") or "—"
+                            data_par = par.get("data") or "—"
+                            status_ic = "✅"
+                        else:
+                            relator = data_par = "—"
+                            tipo_par  = "⏳ Pendente de parecer"
+                            status_ic = "⏳"
+                        com_rows.append({
+                            "":         status_ic,
+                            "Comissão": com,
+                            "Relator":  relator,
+                            "Parecer":  tipo_par,
+                            "Data":     data_par,
+                        })
+
+                    df_com = pd.DataFrame(com_rows)
+                    st.dataframe(
+                        df_com,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "":         st.column_config.TextColumn("", width="small"),
+                            "Comissão": st.column_config.TextColumn("Comissão"),
+                            "Relator":  st.column_config.TextColumn("Relator"),
+                            "Parecer":  st.column_config.TextColumn("Parecer"),
+                            "Data":     st.column_config.TextColumn("Data", width="small"),
+                        },
+                    )
                 else:
-                    st.info("Sem andamentos registrados para este projeto.")
+                    st.info("Nenhuma comissão registrada para este projeto.")
+
+                st.divider()
+
+                # ── Linha do tempo ────────────────────────────────────────
+                st.markdown("##### Linha do tempo")
+
+                def _tram_css(desc: str) -> str:
+                    d = desc.lower()
+                    if any(k in d for k in ["aprovado", "favoráv", "favorav"]):
+                        return "tram-ok"
+                    if any(k in d for k in ["contrário", "contrario", "rejeitado", "sem parecer"]):
+                        return "tram-no"
+                    if any(k in d for k in ["resultado final", " lei ", "resolução", "lei nº"]):
+                        return "tram-final"
+                    if "arquivo" in d:
+                        return "tram-arch"
+                    if "distribuiç" in d or "parecer em plen" in d or "relator" in d:
+                        return "tram-dist"
+                    return "tram-def"
+
+                if all_ands:
+                    rows_html = []
+                    for a in all_ands:
+                        desc = (a.get("descricao") or "").strip()
+                        data = (a.get("data") or "").strip()
+                        css  = _tram_css(desc)
+                        desc_safe = (desc.replace("&","&amp;")
+                                        .replace("<","&lt;")
+                                        .replace(">","&gt;"))
+                        rows_html.append(
+                            f'<div class="tram-row">'
+                            f'<span class="tram-desc {css}">{desc_safe}</span>'
+                            f'<span class="tram-date">{data}</span>'
+                            f'</div>'
+                        )
+                    st.markdown(
+                        f'<div class="tram-box">{"".join(rows_html)}</div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.info("Sem tramitação registrada para este projeto.")
 
     def _render_sub_tab(key_suffix: str, legislatura=None):
         filt = {**filtros_base}
@@ -701,60 +860,9 @@ with tabs[2]:
             _render_sub_tab(leg.replace("-", "_"), legislatura=leg)
 
 # ===========================================================================
-# TAB 4 — Pareceres & Relatores
+# TAB 4 — Histórico
 # ===========================================================================
 with tabs[3]:
-    st.subheader("Pareceres das Comissões e Relatores")
-
-    p1, p2 = st.columns(2)
-    with p1:
-        f_comissao = st.text_input("Filtrar por comissão")
-    with p2:
-        f_relator = st.text_input("Filtrar por relator")
-
-    pareceres = db.get_pareceres(
-        comissao = f_comissao or None,
-        relator  = f_relator  or None,
-        limit    = 200,
-    )
-
-    st.caption(f"**{len(pareceres)}** pareceres encontrados (máx. 200 exibidos)")
-
-    if pareceres:
-        df_p = pd.DataFrame(pareceres)
-        show_p = [c for c in
-                  ["numero", "tipo", "comissao", "relator", "tipo_parecer",
-                   "data", "ementa", "projeto_url"]
-                  if c in df_p.columns]
-        st.dataframe(
-            df_p[show_p],
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "numero":       st.column_config.TextColumn("Projeto"),
-                "tipo":         st.column_config.TextColumn("Tipo", width="small"),
-                "comissao":     st.column_config.TextColumn("Comissão"),
-                "relator":      st.column_config.TextColumn("Relator"),
-                "tipo_parecer": st.column_config.TextColumn("Parecer"),
-                "data":         st.column_config.TextColumn("Data"),
-                "ementa":       st.column_config.TextColumn("Ementa", width="large"),
-                "projeto_url":  st.column_config.LinkColumn("Link"),
-            },
-        )
-        csv_p = df_p[show_p].to_csv(index=False, encoding="utf-8-sig")
-        st.download_button(
-            "⬇ Exportar CSV",
-            data=csv_p.encode("utf-8-sig"),
-            file_name="pareceres_alerj.csv",
-            mime="text/csv",
-        )
-    else:
-        st.info("Nenhum parecer encontrado. Execute a coleta de dados primeiro.")
-
-# ===========================================================================
-# TAB 5 — Histórico
-# ===========================================================================
-with tabs[4]:
     st.subheader("Histórico de Sincronizações")
 
     if st.button("🔄 Atualizar"):

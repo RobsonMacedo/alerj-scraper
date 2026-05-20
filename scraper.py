@@ -80,87 +80,133 @@ AUTOR_RE     = re.compile(r"Autor\(es\)\s*:\s*(?:Deputad[oa]s?\s+)?([A-ZÁÉÍÓ
 # Comissões permanentes da ALERJ — lista canônica e extrator
 # ---------------------------------------------------------------------------
 
-# (nome_canônico, [palavras-chave normalizadas — qualquer uma serve para identificar])
+# Lista canônica oficial das 37 comissões permanentes da ALERJ (biênio 2025-2026).
+# Fonte: www.alerj.rj.gov.br > Processo Legislativo > Comissões Permanentes.
+# Inclui palavras-chave de nomes históricos para compatibilidade com dados anteriores.
+# (nome_canônico, [palavras-chave ASCII-normalizadas — qualquer uma serve para identificar])
 _COMISSOES_MAP: List[Tuple[str, List[str]]] = [
-    ("Comissão de Administração e Serviço Público",
-     ["comissao de administracao e servico", "administracao e servico publico"]),
-    ("Comissão de Agricultura, Pecuária e Políticas Rurais",
-     ["comissao de agricultura", "pecuaria e politicas rurais", "politicas rurais"]),
-    ("Comissão de Assuntos da Criança, do Adolescente e do Idoso",
-     ["comissao de assuntos da crianca", "crianca, do adolescente e do idoso",
-      "crianca e do adolescente"]),
-    ("Comissão de Assuntos Municipais e de Desenvolvimento Regional",
-     ["comissao de assuntos municipais", "desenvolvimento regional"]),
-    ("Comissão de Ciência e Tecnologia",
-     ["comissao de ciencia e tecnologia", "ciencia e tecnologia"]),
-    ("Comissão de Combate às Discriminações e Preconceitos de Raça, Cor, Etnia, Religião e Procedência Nacional",
-     ["comissao de combate as discriminacoes", "discriminacoes e preconceitos",
-      "preconceitos de raca"]),
+    # 1
     ("Comissão de Constituição e Justiça (CCJ)",
-     ["comissao de constituicao e justica", "constituicao e justica", "ccj"]),
+     ["constituicao e justica", "ccj"]),
+    # 2 — nome com vírgulas; armazenado como string única, split usa lógica especial
+    ("Comissão de Orçamento, Finanças, Fiscalização Financeira e Controle",
+     ["comissao de orcamento", "orcamento, financas", "fiscalizacao financeira e controle",
+      "orcamento e financas"]),
+    # 3 — nova comissão 2025
+    ("Comissão de Tributação, Controle da Arrecadação Estadual e de Fiscalização dos Tributos Estaduais",
+     ["comissao de tributacao", "tributacao, controle da arrecadacao",
+      "fiscalizacao dos tributos estaduais"]),
+    # 4 — nome atualizado (era "Políticas Rurais", agora "Rural, Agrária e Pesqueira")
+    ("Comissão de Agricultura, Pecuária e Políticas Rural, Agrária e Pesqueira",
+     ["comissao de agricultura", "pecuaria e politicas rural", "agraria e pesqueira",
+      "politicas rurais"]),
+    # 5
+    ("Comissão de Assuntos da Criança, do Adolescente e do Idoso",
+     ["assuntos da crianca", "crianca, do adolescente", "crianca e do adolescente"]),
+    # 6
+    ("Comissão de Assuntos Municipais e de Desenvolvimento Regional",
+     ["assuntos municipais", "desenvolvimento regional"]),
+    # 7
+    ("Comissão de Ciência e Tecnologia",
+     ["ciencia e tecnologia"]),
+    # 8
+    ("Comissão de Combate às Discriminações e Preconceitos de Raça, Cor, Etnia, Religião e Procedência Nacional",
+     ["combate as discriminacoes", "discriminacoes e preconceitos", "preconceitos de raca"]),
+    # 9
     ("Comissão de Cultura",
      ["comissao de cultura"]),
+    # 10
+    ("Comissão de Defesa dos Direitos Humanos e Cidadania",
+     ["defesa dos direitos humanos", "direitos humanos e cidadania"]),
+    # 11
     ("Comissão de Defesa Civil",
      ["comissao de defesa civil"]),
-    ("Comissão de Defesa da Pessoa com Deficiência",
-     ["comissao de defesa da pessoa com deficiencia", "pessoa com deficiencia"]),
+    # 12
     ("Comissão de Defesa do Consumidor",
-     ["comissao de defesa do consumidor", "defesa do consumidor"]),
+     ["defesa do consumidor"]),
+    # 13
     ("Comissão de Defesa do Meio Ambiente",
-     ["comissao de defesa do meio ambiente", "defesa do meio ambiente"]),
+     ["defesa do meio ambiente"]),
+    # 14
     ("Comissão de Defesa dos Direitos da Mulher",
-     ["comissao de defesa dos direitos da mulher", "direitos da mulher"]),
-    ("Comissão de Defesa dos Direitos Humanos e Cidadania",
-     ["comissao de defesa dos direitos humanos", "direitos humanos e cidadania"]),
-    ("Comissão de Direitos dos Animais",
-     ["comissao de direitos dos animais", "direitos dos animais"]),
-    ("Comissão de Economia",
-     ["comissao de economia"]),
+     ["direitos da mulher"]),
+    # 15 — renomeada (era "Comissão de Direitos dos Animais")
+    ("Comissão de Defesa e Proteção dos Animais no Estado do Rio de Janeiro",
+     ["defesa e protecao dos animais", "protecao dos animais", "direitos dos animais"]),
+    # 16 — fundida (era "Comissão de Economia" + "Comissão de Indústria, Comércio e Serviços")
+    ("Comissão de Economia, Indústria e Comércio",
+     ["economia, industria e comercio", "comissao de economia",
+      "industria, comercio e servicos", "industria e comercio"]),
+    # 17 — renomeada (era "Comissão de Defesa da Pessoa com Deficiência")
+    ("Comissão de Pessoa com Deficiência",
+     ["pessoa com deficiencia", "defesa da pessoa com deficiencia"]),
+    # 18
+    ("Comissão de Emendas Constitucionais e Vetos",
+     ["emendas constitucionais e vetos", "emendas constitucionais"]),
+    # 19
     ("Comissão de Educação",
      ["comissao de educacao"]),
-    ("Comissão de Emendas Constitucionais e Vetos",
-     ["comissao de emendas constitucionais", "emendas constitucionais e vetos"]),
+    # 20
     ("Comissão de Esporte e Lazer",
-     ["comissao de esporte e lazer", "esporte e lazer"]),
-    ("Comissão de Ética e Decoro Parlamentar",
-     ["comissao de etica e decoro", "etica e decoro parlamentar"]),
-    ("Comissão de Habitação",
-     ["comissao de habitacao"]),
-    ("Comissão de Indústria, Comércio e Serviços",
-     ["comissao de industria, comercio", "comissao de industria e comercio",
-      "industria, comercio e servicos"]),
-    ("Comissão de Infraestrutura, Obras e Serviços Públicos",
-     ["comissao de infraestrutura", "infraestrutura, obras e servicos publicos"]),
-    ("Comissão de Legislação Constitucional Complementar e Códigos",
-     ["comissao de legislacao constitucional", "legislacao constitucional complementar"]),
+     ["esporte e lazer"]),
+    # 21
     ("Comissão de Minas e Energia",
-     ["comissao de minas e energia", "minas e energia"]),
+     ["minas e energia"]),
+    # 22
+    ("Comissão de Legislação Constitucional Complementar e Códigos",
+     ["legislacao constitucional complementar"]),
+    # 23 — renomeada (era "Comissão de Infraestrutura, Obras e Serviços Públicos")
+    ("Comissão de Obras Públicas",
+     ["comissao de obras publicas", "obras publicas",
+      "infraestrutura, obras e servicos publicos", "comissao de infraestrutura"]),
+    # 24
     ("Comissão de Normas Internas e Proposições Externas",
-     ["comissao de normas internas", "normas internas e proposicoes externas"]),
-    ("Comissão de Orçamento, Finanças, Fiscalização Financeira e Controle",
-     ["comissao de orcamento", "orcamento, financas", "fiscalizacao financeira e controle"]),
+     ["normas internas e proposicoes externas", "normas internas"]),
+    # 25 — renomeada (era "Comissão de Prevenção e Tratamento do Uso de Drogas")
+    ("Comissão de Prevenção ao Uso de Drogas e Dependentes Químicos em Geral",
+     ["prevencao ao uso de drogas", "dependentes quimicos",
+      "prevencao e tratamento do uso de drogas", "tratamento do uso de drogas"]),
+    # 26 — "Habitação" agora só existe aqui (era também comissão separada)
     ("Comissão de Política Urbana, Habitação e Assuntos Fundiários",
-     ["comissao de politica urbana", "politica urbana, habitacao", "assuntos fundiarios"]),
-    ("Comissão de Prevenção e Tratamento do Uso de Drogas",
-     ["comissao de prevencao e tratamento do uso de drogas", "tratamento do uso de drogas"]),
-    ("Comissão de Saneamento Ambiental",
-     ["comissao de saneamento ambiental", "saneamento ambiental"]),
+     ["politica urbana, habitacao", "assuntos fundiarios", "comissao de habitacao"]),
+    # 27
     ("Comissão de Saúde",
      ["comissao de saude"]),
+    # 28 — nova comissão 2025
+    ("Comissão de Redação",
+     ["comissao de redacao"]),
+    # 29
     ("Comissão de Segurança Alimentar",
-     ["comissao de seguranca alimentar", "seguranca alimentar"]),
-    ("Comissão de Segurança Pública e Assuntos de Polícia",
-     ["comissao de seguranca publica", "seguranca publica e assuntos de policia"]),
+     ["seguranca alimentar"]),
+    # 30
+    ("Comissão de Saneamento Ambiental",
+     ["saneamento ambiental"]),
+    # 31
     ("Comissão de Servidores Públicos",
-     ["comissao de servidores publicos", "servidores publicos"]),
-    ("Comissão de TCU, Tribunal de Contas do Estado e Contratos",
-     ["comissao de tcu", "tribunal de contas do estado e contratos",
-      "tcu, tribunal de contas"]),
-    ("Comissão de Trabalho, Legislação Social e Seguridade Social",
-     ["comissao de trabalho, legislacao", "trabalho, legislacao social",
-      "seguridade social"]),
+     ["servidores publicos"]),
+    # 32
+    ("Comissão de Segurança Pública e Assuntos de Polícia",
+     ["seguranca publica e assuntos de policia", "seguranca publica"]),
+    # 33
     ("Comissão de Transportes",
      ["comissao de transportes"]),
+    # 34
+    ("Comissão de Trabalho, Legislação Social e Seguridade Social",
+     ["trabalho, legislacao social", "seguridade social"]),
+    # 35 — nova comissão 2025
+    ("Comissão de Turismo",
+     ["comissao de turismo"]),
+    # 36 — nova comissão 2025
+    ("Comissão para Prevenir e Combater a Pirataria no Estado do Rio de Janeiro",
+     ["prevenir e combater a pirataria", "combater a pirataria", "pirataria no estado"]),
+    # 37 — renomeada (era "Comissão de Ética e Decoro Parlamentar")
+    ("Comissão de Conselho de Ética e Decoro Parlamentar",
+     ["conselho de etica e decoro", "etica e decoro parlamentar"]),
+    # Histórico — pode aparecer em dados de 2019-2023
+    ("Comissão de Administração e Serviço Público",
+     ["administracao e servico publico"]),
+    ("Comissão de TCU, Tribunal de Contas do Estado e Contratos",
+     ["tcu, tribunal de contas", "tribunal de contas do estado e contratos"]),
 ]
 
 
@@ -332,74 +378,159 @@ def _parse_detail(html: str, url: str) -> Dict:
 
 
 def _extract_andamento(soup: BeautifulSoup) -> List[Dict]:
+    """
+    Captura a tabela de TRAMITAÇÃO da ALERJ.
+    Cada linha tem: [descrição com "=>", data].
+    A tabela é identificada pelo elemento anterior contendo "tramitac" + "projeto"
+    (normalizado ASCII para tolerar encoding variável do servidor ALERJ).
+    """
     results = []
-    INCLUDE_KWS = ["tramitaç", "andamento", "histórico", "moviment"]
-    EXCLUDE_KWS = ["cadastro de proposi", "data public", "autor(es)"]
+    seen: set = set()
 
     for table in soup.find_all("table"):
-        header_text = " ".join(
-            el.get_text(" ", strip=True).lower()
-            for el in table.find_all(["th", "caption"])
-        )
-        prev = table.find_previous(["h2", "h3", "h4", "caption", "b", "strong"])
-        prev_text = prev.get_text(" ", strip=True).lower() if prev else ""
-        combined = header_text + " " + prev_text
+        prev = table.find_previous(["h1", "h2", "h3", "h4", "b", "strong", "font"])
+        prev_norm = _norm(prev.get_text(" ", strip=True)) if prev else ""
 
-        if any(kw in combined for kw in EXCLUDE_KWS):
-            continue
-        if not any(kw in combined for kw in INCLUDE_KWS):
+        # Identifica pelo título: "TRAMITAÇÃO DO PROJETO ..."
+        if "tramitac" not in prev_norm or "projeto" not in prev_norm:
             continue
 
-        rows = table.find_all("tr")
-        for row in rows:
-            cells = [td.get_text(" ", strip=True) for td in row.find_all("td")]
-            if not any(c.strip() for c in cells):
-                continue
-            if all(c == c.upper() and len(c) < 30 for c in cells if c):
-                continue
-            date_val = None
-            for c in cells:
-                d = _first_date(c)
-                if d:
-                    date_val = d
-                    break
-            desc = " | ".join(c for c in cells if c.strip()).strip()
-            if desc and len(desc) > 15 and "link:" not in desc.lower():
-                results.append({"data": date_val, "descricao": desc[:400], "local": ""})
+        for row in table.find_all("tr"):
+            cells = [td.get_text(" ", strip=True) for td in row.find_all(["td", "th"])]
+            non_empty = [c.strip() for c in cells if c.strip()]
+
+            # Linhas válidas têm "=>" e o primeiro segmento é curto (nome da ação, não ementa)
+            for c in non_empty:
+                if "=>" not in c or len(c) < 10:
+                    continue
+                first_segment = c.split("=>")[0].strip()
+                if len(first_segment) > 80:  # célula concatenada da tabela aninhada
+                    continue
+
+                date_val = None
+                for d_cell in non_empty:
+                    d = _first_date(d_cell)
+                    if d:
+                        date_val = d
+                        break
+
+                key = (date_val, c[:60])
+                if key in seen:
+                    continue
+                seen.add(key)
+
+                results.append({"data": date_val, "descricao": c[:500], "local": ""})
 
     return results
+
+
+# Captura tanto "Distribuicao" quanto "Parecer em Plenario" (onde ficam os pareceres reais).
+# Após o relator, podem existir 0-N segmentos "algo =>" antes de "parecer: tipo".
+_PAR_TRAM_RE = re.compile(
+    r"(?P<acao>distribuicao|parecer em plenario)\s*=>\s*\S+\s*=>\s*"
+    r"(?P<comissao>[^=]+?)\s*=>\s*relator:\s*"
+    r"(?P<relator>[^=]{1,100}?)\s*=>"
+    r"(?:[^=]{1,200}=>\s*)*"       # pula segmentos intermediários (ex: "Proposição 683/2019 =>")
+    r"parecer:\s*(?P<tipo>[^=]{1,400})",
+    re.IGNORECASE,
+)
+
+
+def _normalize_tipo(tipo: str) -> str:
+    """Normaliza o texto do tipo de parecer para uma etiqueta legível."""
+    t = tipo.lower().strip()
+    if "favoravel com emenda" in t or "favoravel, com emenda" in t:
+        return "Favorável com Emendas"
+    if "favoravel com substitut" in t or "substitutivo" in t and "favoravel" in t:
+        return "Favorável com Substitutivo"
+    if "favoravel" in t:
+        return "Favorável"
+    if "contrario" in t:
+        return "Contrário"
+    if "pela inconstitucionalidade" in t:
+        return "Pela Inconstitucionalidade"
+    if "constitucionalidade" in t:
+        return "Pela Constitucionalidade"
+    if "departamento de apoio" in t or "comissoes permanentes" in t:
+        return "Aguardando relator"
+    if "prejudicado" in t:
+        return "Prejudicado"
+    if "aprovado" in t:
+        return "Aprovado"
+    # Trunca e capitaliza para exibir o texto bruto de forma limpa
+    cleaned = tipo.strip()[:80]
+    return cleaned[0].upper() + cleaned[1:] if cleaned else tipo
 
 
 def _extract_pareceres(soup: BeautifulSoup) -> List[Dict]:
-    results = []
-    KEYWORDS = ["parecer", "relator", "comissão", "comiss"]
+    """
+    Extrai pareceres das comissões da tramitação ALERJ.
+    Prioriza 'Parecer em Plenário' sobre 'Distribuição' para a mesma comissão
+    (o plenário tem o parecer final real; a distribuição tem apenas o roteamento inicial).
+    Normaliza o texto para ASCII para tolerar encoding variável do servidor.
+    """
+    # chave: comissao_norm → {comissao, relator, tipo_parecer, data, is_plenario}
+    results_map: dict = {}
 
     for table in soup.find_all("table"):
-        headers = [th.get_text(" ", strip=True).lower() for th in table.find_all("th")]
-        if not any(kw in " ".join(headers) for kw in KEYWORDS):
-            prev = table.find_previous(["h1", "h2", "h3", "h4", "b", "strong"])
-            prev_text = (prev.get_text(" ", strip=True).lower() if prev else "")
-            if not any(kw in prev_text for kw in KEYWORDS):
-                continue
-
-        rows = table.find_all("tr")[1:]
-        for row in rows:
-            cells = [td.get_text(" ", strip=True) for td in row.find_all("td")]
-            if not any(c.strip() for c in cells):
-                continue
+        for row in table.find_all("tr"):
+            cells = [td.get_text(" ", strip=True) for td in row.find_all(["td", "th"])]
             date_val = None
             for c in cells:
                 d = _first_date(c)
                 if d:
                     date_val = d
                     break
-            results.append({
-                "comissao":     cells[0] if len(cells) > 0 else "",
-                "relator":      cells[1] if len(cells) > 1 else "",
-                "tipo_parecer": cells[2] if len(cells) > 2 else "",
-                "data":         date_val,
-            })
-    return results
+            for c in cells:
+                c_norm = _norm(c)
+                m = _PAR_TRAM_RE.search(c_norm)
+                if not m:
+                    continue
+
+                acao         = m.group("acao").strip()
+                comissao_n   = m.group("comissao").strip()
+                relator_n    = m.group("relator").strip()
+                tipo_n       = m.group("tipo").strip()
+
+                comissao = _recover_original(c, comissao_n)
+                relator  = _recover_original(c, relator_n)
+                tipo     = _normalize_tipo(tipo_n)
+                is_plen  = "plenario" in acao
+
+                existing = results_map.get(comissao_n)
+                # Prefere "Parecer em Plenário" sobre "Distribuição"
+                if not existing or (is_plen and not existing["is_plen"]):
+                    results_map[comissao_n] = {
+                        "comissao":     comissao,
+                        "relator":      relator,
+                        "tipo_parecer": tipo,
+                        "data":         date_val,
+                        "is_plen":      is_plen,
+                    }
+
+    return [
+        {k: v for k, v in r.items() if k != "is_plen"}
+        for r in results_map.values()
+    ]
+
+
+def _recover_original(original: str, norm_fragment: str) -> str:
+    """
+    Tenta recuperar o trecho original a partir de um fragmento normalizado.
+    Percorre o original por janelas deslizantes do mesmo comprimento e
+    retorna o trecho cujo _norm() coincide com norm_fragment.
+    """
+    target_len = len(norm_fragment)
+    # Varredura: fatias de comprimento target_len ± 4 (acento pode variar o tamanho)
+    for extra in range(0, 6):
+        for start in range(len(original)):
+            for length in (target_len + extra, target_len - extra):
+                if length <= 0:
+                    continue
+                candidate = original[start:start + length]
+                if _norm(candidate) == norm_fragment:
+                    return candidate.strip()
+    return norm_fragment  # fallback: retorna normalizado
 
 
 # ---------------------------------------------------------------------------
