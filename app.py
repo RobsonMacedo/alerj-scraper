@@ -264,12 +264,11 @@ with tabs[0]:
 
     stats_db = db.get_stats()
 
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("📁 Total de Projetos",    f"{stats_db['total_projetos']:,}")
     c2.metric("📄 Proj. de Lei (PL)",    f"{stats_db['total_pl']:,}")
     c3.metric("📑 Proj. Resolução (PR)", f"{stats_db['total_pr']:,}")
-    c4.metric("⚖️ Pareceres",            f"{stats_db['total_pareceres']:,}")
-    c5.metric("🔀 Andamentos",           f"{stats_db['total_andamentos']:,}")
+    c4.metric("🔀 Tramitações",          f"{stats_db['total_andamentos']:,}")
 
     # Totais por legislatura
     leges_db = db.get_legislaturas()
