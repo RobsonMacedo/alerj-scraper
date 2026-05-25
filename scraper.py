@@ -75,7 +75,7 @@ DATE_RE      = re.compile(r"\b(\d{2}/\d{2}/\d{4})\b")
 ANO_RE       = re.compile(r"\b(20\d{2}|19\d{2})\b")
 NUMERO_RE    = re.compile(r"[Nn][º°\.]\s*(\d+/\d{4})")
 EMENTA_RE    = re.compile(r"EMENTA\s*[:：]\s*(.+?)(?=\s*Autor\(es\)|\s*JUSTIFICATIVA|$)", re.DOTALL)
-AUTOR_RE     = re.compile(r"Autor\(es\)\s*:\s*(?:Deputad[oa]s?\s+)?([A-ZÁÉÍÓÚÀÈÌÒÙÂÊÎÔÛÃÕÇ\s]+?)(?=\s*A ASSEMBLEIA|\s*RESOLVE|$)", re.DOTALL)
+AUTOR_RE     = re.compile(r"Autor\(es\)\s*:\s*(?:Deputad[oa]s?\s+)?([A-ZÁÉÍÓÚÀÈÌÒÙÂÊÎÔÛÃÕÇ,\s]+?)(?=\s*A ASSEMBLEIA|\s*RESOLVE|$)", re.DOTALL)
 # ---------------------------------------------------------------------------
 # Comissões permanentes da ALERJ — lista canônica e extrator
 # ---------------------------------------------------------------------------
@@ -333,17 +333,28 @@ def _parse_detail(html: str, url: str) -> Dict:
     tables = soup.find_all("table")
     for table in tables:
         rows = table.find_all("tr")
+        _last_lbl = ""
         for row in rows:
             cells = [td.get_text(" ", strip=True) for td in row.find_all(["td", "th"])]
             if len(cells) < 2:
                 continue
             pairs = list(zip(cells[0::2], cells[1::2]))
             for label, value in pairs:
-                lbl = label.lower()
-                if "autor" in lbl and not data["autor"]:
-                    data["autor"] = value.strip()
-                elif "regime" in lbl and not data["situacao"]:
-                    data["situacao"] = value.strip()
+                lbl = label.strip().lower()
+                effective = lbl if lbl else _last_lbl
+                if lbl:
+                    _last_lbl = lbl
+                val = value.strip()
+                if not val:
+                    continue
+                if "autor" in effective:
+                    if not data["autor"]:
+                        data["autor"] = val
+                    elif not lbl:
+                        # linha de continuação (label vazio): agrega coautores
+                        data["autor"] = data["autor"].rstrip(", ") + ", " + val
+                elif "regime" in effective and not data["situacao"]:
+                    data["situacao"] = val
 
     if not data["autor"]:
         m_autor = AUTOR_RE.search(full_text)
