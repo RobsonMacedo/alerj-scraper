@@ -300,27 +300,41 @@ with tabs[0]:
     else:
         st.info("Nenhuma sincronização realizada ainda. Acesse **🔄 Coletar Dados** para iniciar.")
 
-    projetos_todos = db.get_projetos(limit=5000)
-    if projetos_todos:
-        st.divider()
-        df_all = pd.DataFrame(projetos_todos)
-        col1, col2 = st.columns(2)
-        with col1:
-            st.subheader("Por tipo")
-            if "tipo" in df_all.columns:
-                tc = df_all["tipo"].value_counts().reset_index()
-                tc.columns = ["Tipo", "Quantidade"]
-                st.bar_chart(tc.set_index("Tipo"))
-        with col2:
-            st.subheader("Por ano")
-            if "ano" in df_all.columns:
-                ac = (
-                    df_all[df_all["ano"].notna()]
-                    .groupby("ano").size().reset_index(name="Quantidade")
+    st.divider()
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.subheader("Por tipo")
+        _conn = db.get_connection()
+        tc_rows = _conn.execute(
+            "SELECT tipo, COUNT(*) as n FROM projetos WHERE tipo IS NOT NULL GROUP BY tipo ORDER BY n DESC"
+        ).fetchall()
+        _conn.close()
+        if tc_rows:
+            df_tc = pd.DataFrame(tc_rows, columns=["Tipo", "Quantidade"])
+            st.bar_chart(df_tc.set_index("Tipo"), color="#1f77b4")
+
+    with col2:
+        st.subheader("Por ano")
+        _conn = db.get_connection()
+        ac_rows = _conn.execute(
+            "SELECT ano, COUNT(*) as n FROM projetos WHERE ano BETWEEN 2015 AND 2026 GROUP BY ano ORDER BY ano"
+        ).fetchall()
+        _conn.close()
+        if ac_rows:
+            import altair as _alt
+            df_ac = pd.DataFrame(ac_rows, columns=["Ano", "Quantidade"])
+            df_ac["Ano"] = df_ac["Ano"].astype(int).astype(str)
+            _chart = (
+                _alt.Chart(df_ac)
+                .mark_bar(color="#1f77b4")
+                .encode(
+                    x=_alt.X("Ano:O", sort=None, axis=_alt.Axis(labelAngle=0)),
+                    y=_alt.Y("Quantidade:Q"),
+                    tooltip=["Ano", "Quantidade"],
                 )
-                if not ac.empty:
-                    ac["ano"] = ac["ano"].astype(int).astype(str)
-                    st.bar_chart(ac.set_index("ano"))
+            )
+            st.altair_chart(_chart, use_container_width=True)
 
 # ===========================================================================
 # TAB 2 — Coletar Dados
@@ -880,7 +894,7 @@ with tabs[3]:
         show_log = [c for c in
                     ["id", "data_inicio", "data_fim", "tipos",
                      "projetos_novos", "projetos_atualizados",
-                     "pareceres_novos", "andamentos_novos", "erros", "status"]
+                     "andamentos_novos", "erros", "status"]
                     if c in df_log.columns]
         st.dataframe(
             df_log[show_log],
@@ -893,8 +907,7 @@ with tabs[3]:
                 "tipos":                st.column_config.TextColumn("Tipos"),
                 "projetos_novos":       st.column_config.NumberColumn("Novos"),
                 "projetos_atualizados": st.column_config.NumberColumn("Atualizados"),
-                "pareceres_novos":      st.column_config.NumberColumn("Pareceres"),
-                "andamentos_novos":     st.column_config.NumberColumn("Andamentos"),
+                "andamentos_novos":     st.column_config.NumberColumn("Tramitações"),
                 "erros":                st.column_config.NumberColumn("Erros"),
                 "status":               st.column_config.TextColumn("Status"),
             },
