@@ -1031,8 +1031,13 @@ def _norm_cmp(s: str) -> str:
     return _uc.normalize("NFKD", (s or "").upper()).encode("ascii", "ignore").decode("ascii")
 
 
+def _so_alfanum(s: str) -> str:
+    """Remove toda pontuação e normaliza espaços, mantendo apenas letras e números."""
+    return " ".join(_re.findall(r"[A-Z0-9]+", _norm_cmp(s)))
+
+
 def _conferir(val_doc: str | None, val_db: str | None) -> str:
-    """Retorna 'ok', 'diverge' ou 'sem_dado'."""
+    """Retorna 'ok', 'ok_pont' (igual exceto pontuação), 'diverge' ou 'sem_dado'."""
     if not val_doc:
         return "sem_dado"
     nd, ndb = _norm_cmp(val_doc), _norm_cmp(val_db or "")
@@ -1041,7 +1046,17 @@ def _conferir(val_doc: str | None, val_db: str | None) -> str:
     if not palavras_doc or not palavras_db:
         return "sem_dado"
     overlap = len(palavras_doc & palavras_db) / len(palavras_doc)
-    return "ok" if overlap >= 0.5 else "diverge"
+    if overlap >= 0.5:
+        return "ok"
+    # Verifica se a única diferença é pontuação
+    if _so_alfanum(nd) == _so_alfanum(ndb):
+        return "ok_pont"
+    # Ementa do documento pode estar truncada (prefixo do texto do banco)
+    nd_alf = _so_alfanum(nd)
+    ndb_alf = _so_alfanum(ndb)
+    if nd_alf and ndb_alf.startswith(nd_alf):
+        return "ok"
+    return "diverge"
 
 with tabs[4]:
     st.subheader("Pauta")
@@ -1183,21 +1198,26 @@ with tabs[4]:
                     st.divider()
 
                     # Relatório detalhado
-                    _ICONE = {"ok": "✅", "diverge": "❌", "sem_dado": "—"}
+                    _ICONE = {"ok": "✅", "ok_pont": "✅", "diverge": "❌", "sem_dado": "—"}
 
                     for _r in _relatorio:
                         _p, _db = _r["p"], _r["db"]
                         _ia = _ICONE[_r["status_autor"]]
                         _ie = _ICONE[_r["status_ementa"]]
 
+                        _tem_diverge = "diverge" in (_r["status_autor"], _r["status_ementa"])
+                        _tem_pont    = "ok_pont" in (_r["status_autor"], _r["status_ementa"])
+
                         if not _db:
                             _titulo_rel = f"❓ {_p['numero']} — Não encontrado no banco de dados"
-                        elif _r["status_autor"] == "diverge" or _r["status_ementa"] == "diverge":
+                        elif _tem_diverge:
                             _titulo_rel = f"⚠️ {_p['numero']} — Divergência detectada"
+                        elif _tem_pont:
+                            _titulo_rel = f"✅ {_p['numero']} — Conferido (diferença de pontuação)"
                         else:
                             _titulo_rel = f"✅ {_p['numero']} — Conferido"
 
-                        _expand = not _db or "diverge" in (_r["status_autor"], _r["status_ementa"])
+                        _expand = not _db or _tem_diverge or _tem_pont
                         with st.expander(_titulo_rel, expanded=_expand):
                             if not _db:
                                 st.error("Projeto não encontrado no banco de dados.")
@@ -1209,13 +1229,19 @@ with tabs[4]:
                                 _col_a, _col_e = st.columns(2)
 
                                 with _col_a:
-                                    st.markdown(f"**{_ia} Autor**")
+                                    _label_a = f"**{_ia} Autor**"
+                                    if _r["status_autor"] == "ok_pont":
+                                        _label_a += " *(só pontuação)*"
+                                    st.markdown(_label_a)
                                     if _p.get("autor_doc"):
                                         st.caption(f"**Pauta:** {_p['autor_doc']}")
                                     st.caption(f"**Banco:** {_db.get('autor') or '—'}")
 
                                 with _col_e:
-                                    st.markdown(f"**{_ie} Ementa**")
+                                    _label_e = f"**{_ie} Ementa**"
+                                    if _r["status_ementa"] == "ok_pont":
+                                        _label_e += " *(só pontuação)*"
+                                    st.markdown(_label_e)
                                     if _p.get("ementa_doc"):
                                         st.caption(f"**Pauta:** {_p['ementa_doc'][:200]}")
                                     st.caption(f"**Banco:** {(_db.get('ementa') or '—')[:200]}")
