@@ -940,7 +940,108 @@ with tabs[3]:
 # ===========================================================================
 # TAB 5 — Pauta
 # ===========================================================================
+import re as _re
+import unicodedata as _uc
+
 _PAUTAS_DIR = Path(__file__).parent / "data" / "pautas"
+
+# ── Helpers de análise de pauta ──────────────────────────────────────────────
+
+def _ler_texto_documento(caminho: Path) -> str:
+    ext = caminho.suffix.lower()
+    try:
+        if ext in {".docx", ".doc"}:
+            from docx import Document as _Doc
+            _d = _Doc(str(caminho))
+            partes = [p.text for p in _d.paragraphs if p.text.strip()]
+            for tbl in _d.tables:
+                for row in tbl.rows:
+                    for cell in row.cells:
+                        if cell.text.strip():
+                            partes.append(cell.text.strip())
+            return "\n".join(partes)
+        elif ext == ".pdf":
+            import pdfplumber as _ppl
+            partes = []
+            with _ppl.open(str(caminho)) as _pdf:
+                for page in _pdf.pages:
+                    t = page.extract_text()
+                    if t:
+                        partes.append(t)
+            return "\n".join(partes)
+    except Exception as exc:
+        return f"__ERRO__:{exc}"
+    return ""
+
+
+def _extrair_projetos_pauta(texto: str) -> list:
+    """Extrai número, autor e ementa de cada projeto listado na pauta."""
+    linhas = texto.split("\n")
+    seen: set = set()
+    results = []
+
+    for linha in linhas:
+        if not _re.search(r"PROJETO\s+DE\s+(?:LEI|RESOLU)", linha, _re.IGNORECASE):
+            continue
+        m_num = _re.search(r"\b(\d{1,5}(?:-[A-Z])?/20\d{2})\b", linha)
+        if not m_num:
+            continue
+        num = m_num.group(1)
+        if num in seen:
+            continue
+        seen.add(num)
+
+        autor = None
+        m_a = _re.search(
+            r"DE\s+AUTORIA\s+D[EOA]S?\s+(?:DEPUTAD[OA]S?\s+)?(.+?)(?:,\s*QUE\b|$)",
+            linha, _re.IGNORECASE,
+        )
+        if m_a:
+            autor = _re.sub(r"\s*\(.*?\)", "", m_a.group(1)).strip().rstrip(",; ")
+
+        ementa = None
+        m_e = _re.search(r",\s*QUE\s+(.+)$", linha, _re.IGNORECASE)
+        if m_e:
+            ementa = m_e.group(1).strip()[:400]
+
+        results.append({"numero": num, "autor_doc": autor, "ementa_doc": ementa})
+
+    return results
+
+
+def _buscar_projeto_db(numero: str) -> dict | None:
+    """Busca projeto no banco pelo número, tentando variantes."""
+    conn = db.get_connection()
+    try:
+        row = conn.execute(
+            "SELECT * FROM projetos WHERE numero = ? LIMIT 1", (numero,)
+        ).fetchone()
+        if not row:
+            base = _re.sub(r"-[A-Z](?=/)", "", numero)
+            row = conn.execute(
+                "SELECT * FROM projetos WHERE numero = ? OR numero LIKE ? LIMIT 1",
+                (base, f"%{base}%"),
+            ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def _norm_cmp(s: str) -> str:
+    return _uc.normalize("NFKD", (s or "").upper()).encode("ascii", "ignore").decode("ascii")
+
+
+def _conferir(val_doc: str | None, val_db: str | None) -> str:
+    """Retorna 'ok', 'diverge' ou 'sem_dado'."""
+    if not val_doc:
+        return "sem_dado"
+    nd, ndb = _norm_cmp(val_doc), _norm_cmp(val_db or "")
+    palavras_doc = set(_re.findall(r"[A-Z]{5,}", nd))
+    palavras_db  = set(_re.findall(r"[A-Z]{5,}", ndb))
+    if not palavras_doc or not palavras_db:
+        return "sem_dado"
+    overlap = len(palavras_doc & palavras_db) / len(palavras_doc)
+    return "ok" if overlap >= 0.5 else "diverge"
 
 with tabs[4]:
     st.subheader("Pauta")
@@ -1025,3 +1126,102 @@ with tabs[4]:
                 if _ex2.button("✖ Cancelar", key="canc_excluir_pauta", use_container_width=True):
                     st.session_state.pauta_confirmar_exclusao = None
                     st.rerun()
+
+    # ── Primeira Revisão ─────────────────────────────────────────────────────
+    st.divider()
+    st.markdown("#### 🔍 Primeira Revisão")
+    st.caption("Extrai os projetos do documento selecionado e confere autor e ementa com o banco de dados.")
+
+    _pauta_files_rev = sorted(_PAUTAS_DIR.glob("*"), key=lambda f: f.stat().st_mtime, reverse=True)
+    _pauta_files_rev = [f for f in _pauta_files_rev if f.suffix.lower() in {".pdf", ".doc", ".docx"}]
+
+    if not _pauta_files_rev:
+        st.info("Envie um arquivo de pauta para usar esta funcionalidade.")
+    else:
+        _sel_rev = st.selectbox(
+            "Arquivo para revisar:",
+            [f.name for f in _pauta_files_rev],
+            key="sel_revisao",
+        )
+
+        if st.button("🔍 Primeira Revisão", type="primary", key="btn_primeira_revisao"):
+            _caminho_rev = _PAUTAS_DIR / _sel_rev
+            with st.spinner("Lendo e analisando documento..."):
+                _texto_rev = _ler_texto_documento(_caminho_rev)
+
+            if _texto_rev.startswith("__ERRO__"):
+                st.error(f"Não foi possível ler o arquivo: {_texto_rev.replace('__ERRO__:', '')}")
+            else:
+                _projetos_doc = _extrair_projetos_pauta(_texto_rev)
+
+                if not _projetos_doc:
+                    st.warning("Nenhum número de projeto encontrado no documento. Verifique o formato.")
+                else:
+                    # Conferência com o banco
+                    _relatorio = []
+                    for _p in _projetos_doc:
+                        _db_row = _buscar_projeto_db(_p["numero"])
+                        _relatorio.append({
+                            "p":            _p,
+                            "db":           _db_row,
+                            "status_autor": _conferir(_p.get("autor_doc"), _db_row.get("autor") if _db_row else None),
+                            "status_ementa":_conferir(_p.get("ementa_doc"), _db_row.get("ementa") if _db_row else None),
+                        })
+
+                    # Resumo
+                    _tot     = len(_relatorio)
+                    _ok      = sum(1 for r in _relatorio if r["db"] and r["status_autor"] != "diverge" and r["status_ementa"] != "diverge")
+                    _div     = sum(1 for r in _relatorio if r["db"] and (r["status_autor"] == "diverge" or r["status_ementa"] == "diverge"))
+                    _nao_enc = sum(1 for r in _relatorio if not r["db"])
+
+                    _s1, _s2, _s3, _s4 = st.columns(4)
+                    _s1.metric("Projetos na pauta", _tot)
+                    _s2.metric("✅ Conferidos", _ok)
+                    _s3.metric("⚠️ Com divergência", _div)
+                    _s4.metric("❓ Não encontrados", _nao_enc)
+
+                    st.divider()
+
+                    # Relatório detalhado
+                    _ICONE = {"ok": "✅", "diverge": "❌", "sem_dado": "—"}
+
+                    for _r in _relatorio:
+                        _p, _db = _r["p"], _r["db"]
+                        _ia = _ICONE[_r["status_autor"]]
+                        _ie = _ICONE[_r["status_ementa"]]
+
+                        if not _db:
+                            _titulo_rel = f"❓ {_p['numero']} — Não encontrado no banco de dados"
+                        elif _r["status_autor"] == "diverge" or _r["status_ementa"] == "diverge":
+                            _titulo_rel = f"⚠️ {_p['numero']} — Divergência detectada"
+                        else:
+                            _titulo_rel = f"✅ {_p['numero']} — Conferido"
+
+                        _expand = not _db or "diverge" in (_r["status_autor"], _r["status_ementa"])
+                        with st.expander(_titulo_rel, expanded=_expand):
+                            if not _db:
+                                st.error("Projeto não encontrado no banco de dados.")
+                                if _p.get("autor_doc"):
+                                    st.markdown(f"**Autor (pauta):** {_p['autor_doc']}")
+                                if _p.get("ementa_doc"):
+                                    st.markdown(f"**Ementa (pauta):** {_p['ementa_doc']}")
+                            else:
+                                _col_a, _col_e = st.columns(2)
+
+                                with _col_a:
+                                    st.markdown(f"**{_ia} Autor**")
+                                    if _p.get("autor_doc"):
+                                        st.caption(f"**Pauta:** {_p['autor_doc']}")
+                                    st.caption(f"**Banco:** {_db.get('autor') or '—'}")
+
+                                with _col_e:
+                                    st.markdown(f"**{_ie} Ementa**")
+                                    if _p.get("ementa_doc"):
+                                        st.caption(f"**Pauta:** {_p['ementa_doc'][:200]}")
+                                    st.caption(f"**Banco:** {(_db.get('ementa') or '—')[:200]}")
+
+                                _inf1, _inf2 = st.columns(2)
+                                _inf1.caption(f"Tipo: {_db.get('tipo','—')} | Legislatura: {_db.get('legislatura','—')}")
+                                _inf2.caption(f"Situação: {_db.get('situacao','—')}")
+                                if _db.get("url"):
+                                    st.markdown(f"[🔗 Ver no site da ALERJ]({_db['url']})")
