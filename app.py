@@ -254,6 +254,7 @@ tabs = st.tabs([
     "🔄 Coletar Dados",
     "📋 Projetos",
     "📜 Histórico",
+    "📅 Pauta",
 ])
 
 # ===========================================================================
@@ -935,3 +936,92 @@ with tabs[3]:
                     st.warning(f"Não foi possível ler o arquivo de log: {e}")
     else:
         st.info("Nenhuma sincronização registrada ainda.")
+
+# ===========================================================================
+# TAB 5 — Pauta
+# ===========================================================================
+_PAUTAS_DIR = Path(__file__).parent / "data" / "pautas"
+
+with tabs[4]:
+    st.subheader("Pauta")
+    st.caption("Envie arquivos de pauta (PDF ou Word) para armazenamento e análise posterior.")
+
+    _PAUTAS_DIR.mkdir(parents=True, exist_ok=True)
+
+    # ── Upload ───────────────────────────────────────────────────────────────
+    if "pauta_upload_key" not in st.session_state:
+        st.session_state.pauta_upload_key = 0
+
+    with st.container(border=True):
+        st.markdown("#### ⬆ Enviar arquivo")
+        _uploaded = st.file_uploader(
+            "Selecione um arquivo PDF ou Word:",
+            type=["pdf", "doc", "docx"],
+            key=f"pauta_uploader_{st.session_state.pauta_upload_key}",
+        )
+        if _uploaded is not None:
+            _dest = _PAUTAS_DIR / _uploaded.name
+            if _dest.exists():
+                st.warning(f"Já existe um arquivo com o nome **{_uploaded.name}**. Clique em Substituir para sobrescrever.")
+                if st.button("Substituir", type="primary", key="sub_pauta"):
+                    _dest.write_bytes(_uploaded.getvalue())
+                    st.session_state.pauta_upload_key += 1
+                    st.success(f"✅ **{_uploaded.name}** substituído com sucesso.")
+                    st.rerun()
+            else:
+                _dest.write_bytes(_uploaded.getvalue())
+                st.session_state.pauta_upload_key += 1
+                st.success(f"✅ **{_uploaded.name}** salvo com sucesso.")
+                st.rerun()
+
+    # ── Lista de arquivos ────────────────────────────────────────────────────
+    st.markdown("#### 📂 Arquivos enviados")
+
+    _pauta_files = sorted(_PAUTAS_DIR.glob("*"), key=lambda f: f.stat().st_mtime, reverse=True)
+    _pauta_files = [f for f in _pauta_files if f.suffix.lower() in {".pdf", ".doc", ".docx"}]
+
+    if "pauta_confirmar_exclusao" not in st.session_state:
+        st.session_state.pauta_confirmar_exclusao = None
+
+    if not _pauta_files:
+        st.info("Nenhum arquivo enviado ainda.")
+    else:
+        for _pf in _pauta_files:
+            _size_kb = _pf.stat().st_size / 1024
+            _mtime   = datetime.fromtimestamp(_pf.stat().st_mtime).strftime("%d/%m/%Y %H:%M")
+            _ext_icon = "📄" if _pf.suffix.lower() == ".pdf" else "📝"
+            _key      = _pf.name
+
+            _c1, _c2, _c3, _c4, _c5 = st.columns([4, 1.5, 1.2, 0.8, 0.8])
+            _c1.markdown(f"{_ext_icon} **{_pf.name}**")
+            _c2.caption(f"{_size_kb:,.1f} KB")
+            _c3.caption(_mtime)
+            with _c4:
+                with open(_pf, "rb") as _fh:
+                    st.download_button(
+                        "⬇",
+                        data=_fh.read(),
+                        file_name=_pf.name,
+                        mime="application/octet-stream",
+                        key=f"dl_pauta_{_key}",
+                        use_container_width=True,
+                        help="Baixar arquivo",
+                    )
+            with _c5:
+                if st.button("✕", key=f"del_pauta_{_key}", use_container_width=True, help="Excluir arquivo"):
+                    st.session_state.pauta_confirmar_exclusao = str(_pf)
+                    st.rerun()
+
+        # ── Confirmação de exclusão ──────────────────────────────────────────
+        if st.session_state.pauta_confirmar_exclusao:
+            _alvo = Path(st.session_state.pauta_confirmar_exclusao)
+            if _alvo.exists():
+                st.warning(f"Confirma a exclusão de **{_alvo.name}**? Esta ação não pode ser desfeita.")
+                _ex1, _ex2, _ = st.columns([1, 1, 4])
+                if _ex1.button("✅ Confirmar", type="primary", key="conf_excluir_pauta", use_container_width=True):
+                    _alvo.unlink()
+                    st.session_state.pauta_confirmar_exclusao = None
+                    st.rerun()
+                if _ex2.button("✖ Cancelar", key="canc_excluir_pauta", use_container_width=True):
+                    st.session_state.pauta_confirmar_exclusao = None
+                    st.rerun()
