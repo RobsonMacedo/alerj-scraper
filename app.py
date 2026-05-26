@@ -1047,13 +1047,20 @@ def _ler_texto_documento(caminho: Path) -> str:
     return ""
 
 
+_REL_DOC_RE = _re.compile(
+    r"\bRELATOR[A]?\s*[:\-]\s*(?:(?:DEP(?:UTAD[OA])?\.?\s+)|(?:DR\.?\s+)|(?:PROF\.?\s+))?"
+    r"(.+?)(?:\s*[;,]|\s*$)",
+    _re.IGNORECASE,
+)
+
+
 def _extrair_projetos_pauta(texto: str) -> list:
-    """Extrai número, autor e ementa de cada projeto listado na pauta."""
+    """Extrai número, autor, ementa e relator de cada projeto listado na pauta."""
     linhas = texto.split("\n")
     seen: set = set()
     results = []
 
-    for linha in linhas:
+    for i, linha in enumerate(linhas):
         if not _re.search(r"PROJETO\s+DE\s+(?:LEI|RESOLU)", linha, _re.IGNORECASE):
             continue
         m_num = _re.search(r"\b(\d{1,5}(?:-[A-Z])?/20\d{2})\b", linha)
@@ -1077,7 +1084,22 @@ def _extrair_projetos_pauta(texto: str) -> list:
         if m_e:
             ementa = m_e.group(1).strip()[:400]
 
-        results.append({"numero": num, "autor_doc": autor, "ementa_doc": ementa})
+        # Busca relator na mesma linha e nas próximas 6 (até o próximo projeto)
+        relator_doc = None
+        for j_off, src in enumerate([linha] + linhas[i+1 : i+7]):
+            if j_off > 0 and _re.search(r"PROJETO\s+DE\s+(?:LEI|RESOLU)", src, _re.IGNORECASE):
+                break
+            m_r = _REL_DOC_RE.search(src)
+            if m_r:
+                relator_doc = m_r.group(1).strip().rstrip(",; ")
+                break
+
+        results.append({
+            "numero":      num,
+            "autor_doc":   autor,
+            "ementa_doc":  ementa,
+            "relator_doc": relator_doc,
+        })
 
     return results
 
@@ -1157,6 +1179,81 @@ def _conferir(val_doc: str | None, val_db: str | None) -> str:
     if nd_alf and ndb_alf.startswith(nd_alf):
         return "ok"
     return "diverge"
+
+
+def _buscar_pareceres_db(projeto_id: int) -> list:
+    """Retorna pareceres do banco; usa andamento como fallback se a tabela estiver vazia.
+    CCJ sempre aparece primeiro; demais mantêm a ordem original (reflete a página da ALERJ).
+    """
+    pareceres = db.get_pareceres_projeto(projeto_id)
+    if not pareceres:
+        pareceres = db.get_pareceres_from_andamento(projeto_id)
+
+    def _is_ccj(p: dict) -> bool:
+        nome = _uc.normalize("NFKD", (p.get("comissao") or "").lower()).encode("ascii", "ignore").decode("ascii")
+        return "constituicao" in nome and "justica" in nome
+
+    ccj    = [p for p in pareceres if _is_ccj(p)]
+    outros = [p for p in pareceres if not _is_ccj(p)]
+    return ccj + outros
+
+
+def _icone_parecer(tipo: str) -> str:
+    t = (tipo or "").lower()
+    if "aguardando" in t:
+        return "⏳"
+    if "favoravel" in t or "favorável" in t or "aprovado" in t:
+        return "✅"
+    if "contrario" in t or "contrário" in t:
+        return "❌"
+    if "prejudicado" in t:
+        return "⛔"
+    if t:
+        return "📋"
+    return "⏳"
+
+
+def _conferir_relator(rel_doc: str | None, pareceres_db: list) -> tuple:
+    """Compara relator do documento com os relatores das comissões no banco.
+
+    Retorna (status, relator_db_match, comissao_match):
+      'ok'       — nome encontrado em alguma comissão
+      'diverge'  — nome não encontrado
+      'sem_dado' — documento não tem relator
+    """
+    if not rel_doc:
+        return "sem_dado", "", ""
+
+    def _limpa(s: str) -> str:
+        s = _uc.normalize("NFKD", (s or "").upper()).encode("ascii", "ignore").decode("ascii")
+        s = _re.sub(r"\b(DEP\.?|DEPUTAD[OA]\.?|DR\.?|PROF\.?)\b", "", s)
+        return " ".join(s.split())
+
+    doc_palavras = set(w for w in _limpa(rel_doc).split() if len(w) >= 4)
+    if not doc_palavras:
+        return "sem_dado", "", ""
+
+    melhor_overlap = 0.0
+    melhor_rel     = ""
+    melhor_com     = ""
+
+    for par in pareceres_db:
+        rel_db = par.get("relator") or ""
+        if not rel_db:
+            continue
+        db_palavras = set(w for w in _limpa(rel_db).split() if len(w) >= 4)
+        if not db_palavras:
+            continue
+        overlap = len(doc_palavras & db_palavras) / len(doc_palavras)
+        if overlap > melhor_overlap:
+            melhor_overlap = overlap
+            melhor_rel = rel_db
+            melhor_com = par.get("comissao") or ""
+
+    if melhor_overlap >= 0.5:
+        return "ok", melhor_rel, melhor_com
+    return "diverge", "", ""
+
 
 if _page == "📅 Pauta":
     st.subheader("Pauta")
@@ -1289,11 +1386,22 @@ if _page == "📅 Pauta":
                     _relatorio = []
                     for _p in _projetos_doc:
                         _db_row = _buscar_projeto_db(_p["numero"])
+                        _pareceres_db: list = []
+                        _st_rel, _rel_match, _com_match = "sem_dado", "", ""
+                        if _db_row and _db_row.get("id"):
+                            _pareceres_db = _buscar_pareceres_db(_db_row["id"])
+                            _st_rel, _rel_match, _com_match = _conferir_relator(
+                                _p.get("relator_doc"), _pareceres_db
+                            )
                         _relatorio.append({
-                            "p":            _p,
-                            "db":           _db_row,
-                            "status_autor": _conferir(_p.get("autor_doc"), _db_row.get("autor") if _db_row else None),
-                            "status_ementa":_conferir(_p.get("ementa_doc"), _db_row.get("ementa") if _db_row else None),
+                            "p":              _p,
+                            "db":             _db_row,
+                            "pareceres_db":   _pareceres_db,
+                            "status_autor":   _conferir(_p.get("autor_doc"), _db_row.get("autor") if _db_row else None),
+                            "status_ementa":  _conferir(_p.get("ementa_doc"), _db_row.get("ementa") if _db_row else None),
+                            "status_relator": _st_rel,
+                            "relator_match":  _rel_match,
+                            "comissao_match": _com_match,
                         })
 
                     # Resumo
@@ -1304,14 +1412,16 @@ if _page == "📅 Pauta":
                     )
                     _ok      = sum(1 for r in _relatorio if r["db"] and r["status_autor"] != "diverge" and r["status_ementa"] != "diverge" and r["db"].get("_numero_encontrado", r["p"]["numero"]) == r["p"]["numero"])
                     _div     = sum(1 for r in _relatorio if r["db"] and (r["status_autor"] == "diverge" or r["status_ementa"] == "diverge"))
+                    _rel_div = sum(1 for r in _relatorio if r.get("status_relator") == "diverge")
                     _nao_enc = sum(1 for r in _relatorio if not r["db"])
 
-                    _s1, _s2, _s3, _s4, _s5 = st.columns(5)
-                    _s1.metric("Projetos na pauta", _tot)
-                    _s2.metric("✅ Conferidos", _ok)
-                    _s3.metric("⚠️ Com divergência", _div)
-                    _s4.metric("🔄 Substitutivos", _subst)
-                    _s5.metric("❓ Não encontrados", _nao_enc)
+                    _s1, _s2, _s3, _s4, _s5, _s6 = st.columns(6)
+                    _s1.metric("Projetos na pauta",   _tot)
+                    _s2.metric("✅ Conferidos",        _ok)
+                    _s3.metric("⚠️ Divergências",      _div)
+                    _s4.metric("👤 Relator divergente", _rel_div)
+                    _s5.metric("🔄 Substitutivos",     _subst)
+                    _s6.metric("❓ Não encontrados",   _nao_enc)
 
                     st.divider()
 
@@ -1323,24 +1433,28 @@ if _page == "📅 Pauta":
                         _ia = _ICONE[_r["status_autor"]]
                         _ie = _ICONE[_r["status_ementa"]]
 
-                        _tem_diverge   = "diverge" in (_r["status_autor"], _r["status_ementa"])
-                        _tem_pont      = "ok_pont" in (_r["status_autor"], _r["status_ementa"])
+                        _tem_diverge     = "diverge" in (_r["status_autor"], _r["status_ementa"])
+                        _tem_pont        = "ok_pont" in (_r["status_autor"], _r["status_ementa"])
+                        _tem_rel_div     = _r.get("status_relator") == "diverge"
                         # Verifica se houve fallback para o projeto base (substitutivo não está no banco)
-                        _num_encontrado = (_db or {}).get("_numero_encontrado", _p["numero"])
+                        _num_encontrado  = (_db or {}).get("_numero_encontrado", _p["numero"])
                         _eh_substitutivo = _db is not None and _num_encontrado != _p["numero"]
 
                         if not _db:
                             _titulo_rel = f"❓ {_p['numero']} — Não encontrado no banco de dados"
                         elif _eh_substitutivo:
                             _titulo_rel = f"🔄 {_p['numero']} — Substitutivo sem entrada própria no banco (encontrado como {_num_encontrado})"
-                        elif _tem_diverge:
-                            _titulo_rel = f"⚠️ {_p['numero']} — Divergência detectada"
+                        elif _tem_diverge or _tem_rel_div:
+                            _sufixos = []
+                            if _tem_diverge:   _sufixos.append("autor/ementa")
+                            if _tem_rel_div:   _sufixos.append("relator")
+                            _titulo_rel = f"⚠️ {_p['numero']} — Divergência: {', '.join(_sufixos)}"
                         elif _tem_pont:
                             _titulo_rel = f"✅ {_p['numero']} — Conferido (diferença de pontuação)"
                         else:
                             _titulo_rel = f"✅ {_p['numero']} — Conferido"
 
-                        _expand = not _db or _tem_diverge or _tem_pont or _eh_substitutivo
+                        _expand = not _db or _tem_diverge or _tem_pont or _eh_substitutivo or _tem_rel_div
                         with st.expander(_titulo_rel, expanded=_expand):
                             if not _db:
                                 st.error("Projeto não encontrado no banco de dados.")
@@ -1383,3 +1497,59 @@ if _page == "📅 Pauta":
                                 _inf2.caption(f"Situação: {_db.get('situacao','—')}")
                                 if _db.get("url"):
                                     st.markdown(f"[🔗 Ver no site da ALERJ]({_db['url']})")
+
+                                # ── Comissões e Pareceres ──────────────────────
+                                _pars = _r.get("pareceres_db", [])
+                                if _pars:
+                                    st.markdown("---")
+                                    st.markdown("**📋 Comissões e Pareceres**")
+                                    for _par in _pars:
+                                        _com  = _par.get("comissao") or "—"
+                                        _rel  = _par.get("relator")  or "—"
+                                        _tipo = _par.get("tipo_parecer") or "Aguardando parecer"
+                                        _data = _par.get("data") or "—"
+                                        _ico  = _icone_parecer(_tipo)
+
+                                        # Verificação do relator desta comissão vs pauta
+                                        _rel_doc = _r["p"].get("relator_doc")
+                                        if _rel_doc:
+                                            _ico_rel = "✅" if _r.get("relator_match") == _rel and _r.get("status_relator") == "ok" else "—"
+                                        else:
+                                            _ico_rel = ""
+
+                                        with st.container():
+                                            st.markdown(
+                                                f"{_ico} **{_com}**  \n"
+                                                f"&nbsp;&nbsp;&nbsp;&nbsp;Relator: `{_rel}` &nbsp;|&nbsp; "
+                                                f"Parecer: *{_tipo}* &nbsp;|&nbsp; Data: {_data}",
+                                                unsafe_allow_html=True,
+                                            )
+
+                                    # Relator vindo do documento
+                                    _rel_doc = _r["p"].get("relator_doc")
+                                    if _rel_doc:
+                                        st.markdown("---")
+                                        _st_rel = _r.get("status_relator")
+                                        if _st_rel == "ok":
+                                            st.success(
+                                                f"**👤 Relator (pauta):** {_rel_doc}  \n"
+                                                f"✅ Conferido — encontrado na **{_r.get('comissao_match') or '—'}** "
+                                                f"como `{_r.get('relator_match')}`"
+                                            )
+                                        elif _st_rel == "diverge":
+                                            _rels_bd = ", ".join(
+                                                p["relator"] for p in _pars if p.get("relator")
+                                            ) or "—"
+                                            st.error(
+                                                f"**👤 Relator (pauta):** {_rel_doc}  \n"
+                                                f"❌ Não encontrado nos relatores do banco  \n"
+                                                f"Relatores no banco: {_rels_bd}"
+                                            )
+                                elif _db.get("comissoes"):
+                                    # Projeto tem comissões atribuídas mas sem pareceres registrados
+                                    st.markdown("---")
+                                    st.markdown("**📋 Comissões**")
+                                    for _cn in db.split_comissoes(_db["comissoes"]):
+                                        st.caption(f"⏳ {_cn} — sem parecer registrado no banco")
+                                    if _r["p"].get("relator_doc"):
+                                        st.caption(f"👤 Relator (pauta): {_r['p']['relator_doc']} — não foi possível conferir (sem pareceres no banco)")
