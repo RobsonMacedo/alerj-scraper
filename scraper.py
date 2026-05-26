@@ -770,10 +770,11 @@ class ALERJScraper:
         }
         sync_id = db.start_sync(desc)
 
+        _suffix_re = re.compile(r"-[A-Z]/")
+
         try:
-            # FASE 1 — Coleta de listas
-            all_links: List[Tuple[str, Dict]] = []
             seen_urls: set = set()
+            total_processados = 0
 
             for leg in legislaturas:
                 if self._stop:
@@ -791,104 +792,85 @@ class ALERJScraper:
                         self.log(f"[AVISO] Tipo '{tipo}' não disponível em '{leg}'.")
                         continue
 
-                    self.log(f"=== FASE 1 — {tipo} / {leg} ===")
-                    for link in self.iter_project_links(
+                    self.log(f"=== Iniciando {tipo} / {leg} ===")
+
+                    # Pipeline: cada link é processado imediatamente após ser encontrado
+                    for link_data in self.iter_project_links(
                         tipo, phase_cb=phase_cb, seen=seen_urls,
                         form_path=form_path, legislatura=leg,
                     ):
-                        all_links.append((tipo, link))
+                        if self._stop:
+                            break
 
-                    count_leg_tipo = sum(
-                        1 for t, l in all_links
-                        if t == tipo and l.get("legislatura") == leg
-                    )
-                    self.log(f"[{tipo}/{leg}] Links coletados: {count_leg_tipo}")
+                        url         = link_data["url"]
+                        numero      = link_data.get("numero", "?")
+                        link_leg    = link_data.get("legislatura", leg)
+                        total_processados += 1
 
-            total = len(all_links)
-            self.log(f"=== FASE 2 — Total de projetos para processar: {total} ===")
+                        self.log(f"[{total_processados}] {tipo} {numero} — {url}")
 
-            if phase_cb:
-                phase_cb("iniciando", total=total)
+                        if phase_cb:
+                            phase_cb("processando", atual=total_processados, total=0,
+                                     numero=numero, tipo=tipo, legislatura=link_leg)
 
-            if total == 0:
-                self.log("[AVISO] Nenhum projeto encontrado nas listas. Verifique a conectividade com alerjln1.alerj.rj.gov.br")
-                db.finish_sync(sync_id, stats, status="completed")
-                if phase_cb:
-                    phase_cb("concluido", stats=stats)
-                return stats
+                        quick: Dict = {
+                            "url":               url,
+                            "tipo":              tipo,
+                            "legislatura":       link_leg,
+                            "numero":            numero,
+                            "ementa":            link_data.get("ementa", ""),
+                            "autor":             link_data.get("autor", ""),
+                            "data_apresentacao": link_data.get("data", ""),
+                            "ano":               _first_ano(link_data.get("data", "") or ""),
+                            "situacao":          None,
+                            "comissoes":         None,
+                        }
 
-            # FASE 2 — Coleta de detalhes
-            for i, (tipo, link_data) in enumerate(all_links):
-                if self._stop:
-                    self.log("Coleta interrompida pelo usuário.")
-                    break
+                        detail = self.scrape_detail(url)
+                        if detail:
+                            project_data = {**quick}
+                            for k, v in detail.items():
+                                if k not in ("andamento", "pareceres") and v is not None:
+                                    project_data[k] = v
+                            if quick.get("numero") and _suffix_re.search(quick["numero"]):
+                                detail_num = detail.get("numero") or ""
+                                if not _suffix_re.search(detail_num):
+                                    project_data["numero"] = quick["numero"]
+                                    self.log(f"  [INFO] Número preservado: {quick['numero']}")
+                        else:
+                            project_data = quick
+                            stats["erros"] += 1
+                            self.log(f"  [AVISO] Sem detalhe para {url}")
 
-                url    = link_data["url"]
-                numero = link_data.get("numero", "?")
-                self.log(f"[{i+1}/{total}] {tipo} {numero} — {url}")
+                        project_data["tipo"] = tipo
 
-                leg = link_data.get("legislatura", "2023-2027")
+                        is_new, is_upd = db.upsert_projeto(project_data)
+                        if is_new:
+                            stats["novos"] += 1
+                            self.log(f"  ✔ NOVO: {project_data.get('numero','?')}")
+                        elif is_upd:
+                            stats["atualizados"] += 1
+                            self.log(f"  ↑ Atualizado: {project_data.get('numero','?')}")
+                        else:
+                            self.log(f"  = Sem alteração: {project_data.get('numero','?')}")
 
-                if phase_cb:
-                    phase_cb("processando", atual=i + 1, total=total,
-                             numero=numero, tipo=tipo, legislatura=leg)
+                        if detail:
+                            pid = db.get_projeto_id(url)
+                            if pid:
+                                for a in detail.get("andamento", []):
+                                    if db.insert_andamento(pid, a):
+                                        stats["andamentos"] += 1
+                                for p in detail.get("pareceres", []):
+                                    if db.insert_parecer(pid, p):
+                                        stats["pareceres"] += 1
 
-                quick: Dict = {
-                    "url":               url,
-                    "tipo":              tipo,
-                    "legislatura":       leg,
-                    "numero":            numero,
-                    "ementa":            link_data.get("ementa", ""),
-                    "autor":             link_data.get("autor", ""),
-                    "data_apresentacao": link_data.get("data", ""),
-                    "ano":               _first_ano(link_data.get("data", "") or ""),
-                    "situacao":          None,
-                    "comissoes":         None,
-                }
+                        if progress_cb:
+                            progress_cb(total_processados, 0, dict(stats))
 
-                detail = self.scrape_detail(url)
-                if detail:
-                    project_data = {**quick}
-                    for k, v in detail.items():
-                        if k not in ("andamento", "pareceres") and v is not None:
-                            project_data[k] = v
-                    # Protege sufixo: se a lista trouxe "5137-A/2025" mas o detalhe
-                    # parseou apenas "5137/2025" (regex sem sufixo), mantém o da lista.
-                    _suffix_re = re.compile(r"-[A-Z]/")
-                    if quick.get("numero") and _suffix_re.search(quick["numero"]):
-                        detail_num = detail.get("numero") or ""
-                        if not _suffix_re.search(detail_num):
-                            project_data["numero"] = quick["numero"]
-                            self.log(f"  [INFO] Número preservado da lista: {quick['numero']}")
-                else:
-                    project_data = quick
-                    stats["erros"] += 1
-                    self.log(f"  [AVISO] Sem detalhe para {url}")
+                    self.log(f"[{tipo}/{leg}] Concluído — {total_processados} projetos processados até agora.")
 
-                project_data["tipo"] = tipo
-
-                is_new, is_upd = db.upsert_projeto(project_data)
-                if is_new:
-                    stats["novos"] += 1
-                    self.log(f"  ✔ NOVO: {project_data.get('numero','?')}")
-                elif is_upd:
-                    stats["atualizados"] += 1
-                    self.log(f"  ↑ Atualizado: {project_data.get('numero','?')}")
-                else:
-                    self.log(f"  = Sem alteração: {project_data.get('numero','?')}")
-
-                if detail:
-                    pid = db.get_projeto_id(url)
-                    if pid:
-                        for a in detail.get("andamento", []):
-                            if db.insert_andamento(pid, a):
-                                stats["andamentos"] += 1
-                        for p in detail.get("pareceres", []):
-                            if db.insert_parecer(pid, p):
-                                stats["pareceres"] += 1
-
-                if progress_cb:
-                    progress_cb(i + 1, total, dict(stats))
+            if total_processados == 0:
+                self.log("[AVISO] Nenhum projeto encontrado. Verifique a conectividade com alerjln1.alerj.rj.gov.br")
 
         except Exception as exc:
             tb = traceback.format_exc()

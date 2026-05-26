@@ -21,6 +21,30 @@ import database as db
 from scraper import ALERJScraper, LOG_FILE, LEGISLATURAS, _extract_pareceres, _extract_andamento, HEADERS
 
 # ---------------------------------------------------------------------------
+# Thread-safe live state — @st.cache_resource cria o objeto UMA VEZ e
+# reutiliza nas reruns; o dict nu é modificado in-place pelo thread sem
+# passar pelo proxy do session_state.
+# ---------------------------------------------------------------------------
+@st.cache_resource
+def _get_coleta_state():
+    return (
+        {
+            "scraping":     False,
+            "log_lines":    [],
+            "prog_current": 0,
+            "prog_total":   0,
+            "prog_stats":   {},
+            "fase_texto":   "Aguardando início...",
+            "fase_tipo":    "info",
+            "sync_result":  None,
+            "sync_error":   None,
+        },
+        threading.Lock(),
+    )
+
+_coleta_live, _coleta_log_lock = _get_coleta_state()
+
+# ---------------------------------------------------------------------------
 # Configuração geral
 # ---------------------------------------------------------------------------
 
@@ -163,6 +187,61 @@ hr { border-color:#1a1a2e !important; }
                   color:#e6edf3; margin-bottom:8px; }
 .phase-box-ok   { border-left-color:#10b981; }
 .phase-box-erro { border-left-color:#f87171; }
+
+/* ── Loading animado ──────────────────────────────────────────────────────── */
+@keyframes pulse-ring {
+  0%   { box-shadow:0 0 0 0 rgba(16,185,129,.55); }
+  70%  { box-shadow:0 0 0 10px rgba(16,185,129,0); }
+  100% { box-shadow:0 0 0 0 rgba(16,185,129,0); }
+}
+@keyframes fade-in { from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:none;} }
+@keyframes indeterminate { 0%{transform:translateX(-100%);}100%{transform:translateX(400%);} }
+
+.loading-card {
+  background:#12121a; border:1px solid #1a1a2e; border-radius:14px;
+  padding:22px 26px; margin:12px 0; animation:fade-in .3s ease;
+}
+.loading-header { display:flex; align-items:center; gap:12px; margin-bottom:18px; }
+.pulse-dot { width:12px; height:12px; border-radius:50%; background:#10b981;
+             flex-shrink:0; animation:pulse-ring 1.4s ease-out infinite; }
+.loading-title { font-size:0.95rem; font-weight:600; color:#f4f4f5; line-height:1.3; }
+.loading-sub   { font-size:0.75rem; color:#71717a; margin-top:2px; max-width:700px;
+                 overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+.stepper { display:flex; align-items:center; margin-bottom:18px; }
+.stp { text-align:center; }
+.stp-circle { width:34px; height:34px; border-radius:50%; display:flex;
+              align-items:center; justify-content:center;
+              font-size:0.85rem; font-weight:700; margin:0 auto 5px; }
+.stp-lbl { font-size:0.7rem; line-height:1.35; white-space:nowrap; }
+.stp-wait   .stp-circle { background:#0d0d17; color:#3f3f46; border:2px solid #1a1a2e; }
+.stp-wait   .stp-lbl    { color:#3f3f46; }
+.stp-active .stp-circle { background:#10b981; color:#fff; border:2px solid #10b981;
+                           animation:pulse-ring 1.4s infinite; }
+.stp-active .stp-lbl    { color:#10b981; font-weight:600; }
+.stp-done   .stp-circle { background:#1e3a2f; color:#10b981; border:2px solid #1e3a2f; }
+.stp-done   .stp-lbl    { color:#52525b; }
+.stp-erro   .stp-circle { background:#3b1111; color:#f87171; border:2px solid #3b1111; }
+.stp-erro   .stp-lbl    { color:#f87171; }
+.stp-line      { flex:1; height:2px; background:#1a1a2e; margin:0 8px 24px; min-width:20px; }
+.stp-line-done { flex:1; height:2px; background:#1e3a2f; margin:0 8px 24px; min-width:20px; }
+
+.prog-wrap { background:#0d0d17; border-radius:6px; height:7px; margin:10px 0 4px; overflow:hidden; }
+.prog-fill  { height:100%; border-radius:6px;
+              background:linear-gradient(90deg,#10b981,#34d399);
+              transition:width .5s ease; }
+.prog-label { font-size:0.75rem; color:#52525b; }
+
+.stat-row  { display:flex; gap:8px; margin-top:14px; flex-wrap:wrap; }
+.stat-chip { display:flex; align-items:center; gap:6px;
+             background:#0d0d17; border:1px solid #1a1a2e;
+             border-radius:20px; padding:5px 13px; font-size:0.8rem; color:#a1a1aa; }
+.stat-chip-val { font-weight:700; font-size:0.95rem; }
+.c-green  { color:#10b981; }
+.c-blue   { color:#60a5fa; }
+.c-red    { color:#f87171; }
+.c-purple { color:#a78bfa; }
+.c-orange { color:#fb923c; }
 .tram-box {
     background:#0d0d15; border:1px solid #1a1a2e; border-radius:10px;
     padding:6px; max-height:500px; overflow-y:auto;
@@ -414,27 +493,40 @@ if _page == "📊 Dashboard":
 # TAB 2 — Coletar Dados
 # ===========================================================================
 elif _page == "🔄 Coletar Dados":
+    # Sync thread-safe dict → session_state on every rerun so UI reflects latest thread writes
+    with _coleta_log_lock:
+        st.session_state["log_lines"] = list(_coleta_live["log_lines"])
+    for _k in ("scraping", "prog_current", "prog_total",
+               "prog_stats", "fase_texto", "fase_tipo", "sync_result", "sync_error"):
+        st.session_state[_k] = _coleta_live[_k]
+
     st.subheader("Coleta Incremental de Dados")
 
-    with st.expander("⚙️ Configurações de coleta", expanded=True):
+    with st.expander("⚙️ Configurações de coleta", expanded=not st.session_state.scraping):
         cfg1, cfg2, cfg3, cfg4 = st.columns(4)
         with cfg1:
             tipos_sel = st.multiselect(
                 "Tipos de proposição:",
                 ["PL", "PR"],
                 default=["PL", "PR"],
+                key="coleta_tipos_sel",
+                disabled=st.session_state.scraping,
             )
         with cfg2:
             legs_sel = st.multiselect(
                 "Legislaturas:",
                 TODAS_LEGISLATURAS,
                 default=["2023-2027"],
+                key="coleta_legs_sel",
                 help="Selecione uma ou mais legislaturas. 2023-2027 = mandato atual.",
+                disabled=st.session_state.scraping,
             )
         with cfg3:
             delay_sel = st.slider(
                 "Intervalo entre requisições (s):",
                 min_value=0.3, max_value=5.0, value=1.0, step=0.1,
+                key="coleta_delay_sel",
+                disabled=st.session_state.scraping,
             )
         with cfg4:
             st.markdown("**ℹ️ Fases da coleta**")
@@ -474,25 +566,29 @@ elif _page == "🔄 Coletar Dados":
             except Exception:
                 pass
 
-            st.session_state.scraping     = True
-            st.session_state.log_lines    = []
-            st.session_state.prog_current = 0
-            st.session_state.prog_total   = 0
-            st.session_state.prog_stats   = {}
-            st.session_state.fase_texto   = "⏳ Fase 1 — Iniciando coleta das listas..."
-            st.session_state.fase_tipo    = "info"
-            st.session_state.sync_result  = None
-            st.session_state.sync_error   = None
+            with _coleta_log_lock:
+                _coleta_live["log_lines"] = []
+            _coleta_live["scraping"]     = True
+            _coleta_live["prog_current"] = 0
+            _coleta_live["prog_total"]   = 0
+            _coleta_live["prog_stats"]   = {}
+            _coleta_live["fase_texto"]   = "⏳ Fase 1 — Iniciando coleta das listas..."
+            _coleta_live["fase_tipo"]    = "info"
+            _coleta_live["sync_result"]  = None
+            _coleta_live["sync_error"]   = None
             st.session_state.thread_done  = threading.Event()
+            # Keep session_state in sync for this render cycle (sync block above runs on next rerun)
+            st.session_state.scraping = True
 
             def _log_cb(msg: str):
                 ts = datetime.now().strftime("%H:%M:%S")
-                st.session_state.log_lines.append(f"[{ts}] {msg}")
+                with _coleta_log_lock:
+                    _coleta_live["log_lines"].append(f"[{ts}] {msg}")
 
             def _prog_cb(current: int, total: int, s: Dict):
-                st.session_state.prog_current = current
-                st.session_state.prog_total   = total
-                st.session_state.prog_stats   = s
+                _coleta_live["prog_current"] = current
+                _coleta_live["prog_total"]   = total
+                _coleta_live["prog_stats"]   = s
 
             def _phase_cb(fase: str, **kw):
                 if fase == "listando":
@@ -500,41 +596,41 @@ elif _page == "🔄 Coletar Dados":
                     leg   = kw.get("legislatura", "")
                     pag   = kw.get("pagina", 0)
                     links = kw.get("links_coletados", 0)
-                    st.session_state.fase_texto = (
+                    _coleta_live["fase_texto"] = (
                         f"📋 Fase 1 — Listando {tipo} [{leg}] "
                         f"— página {pag} ({links} links até agora)"
                     )
-                    st.session_state.fase_tipo = "info"
+                    _coleta_live["fase_tipo"] = "info"
                 elif fase == "iniciando":
                     total = kw.get("total", 0)
-                    st.session_state.fase_texto = (
+                    _coleta_live["fase_texto"] = (
                         f"📄 Fase 2 — Buscando detalhes de {total} projetos..."
                     )
-                    st.session_state.fase_tipo  = "info"
-                    st.session_state.prog_total = total
+                    _coleta_live["fase_tipo"]    = "info"
+                    _coleta_live["prog_total"]   = total
                 elif fase == "processando":
                     atual  = kw.get("atual", 0)
                     total  = kw.get("total", 0)
                     numero = kw.get("numero", "")
                     tipo   = kw.get("tipo", "")
                     leg    = kw.get("legislatura", "")
-                    st.session_state.fase_texto = (
+                    _coleta_live["fase_texto"] = (
                         f"📄 Fase 2 — {atual}/{total} — {tipo} {numero} [{leg}]"
                     )
-                    st.session_state.fase_tipo  = "info"
-                    st.session_state.prog_current = atual
+                    _coleta_live["fase_tipo"]    = "info"
+                    _coleta_live["prog_current"] = atual
                 elif fase == "concluido":
                     s = kw.get("stats", {})
-                    st.session_state.fase_texto = (
+                    _coleta_live["fase_texto"] = (
                         f"✅ Concluído — "
                         f"Novos: {s.get('novos',0)} | "
                         f"Atualizados: {s.get('atualizados',0)} | "
                         f"Erros: {s.get('erros',0)}"
                     )
-                    st.session_state.fase_tipo = "ok"
+                    _coleta_live["fase_tipo"] = "ok"
                 elif fase == "erro":
-                    st.session_state.fase_texto = f"❌ Erro: {kw.get('mensagem','')}"
-                    st.session_state.fase_tipo  = "erro"
+                    _coleta_live["fase_texto"] = f"❌ Erro: {kw.get('mensagem','')}"
+                    _coleta_live["fase_tipo"]  = "erro"
 
             scraper = ALERJScraper(delay=delay_sel, log_cb=_log_cb)
             st.session_state.scraper_obj = scraper
@@ -550,15 +646,15 @@ elif _page == "🔄 Coletar Dados":
                         progress_cb=_prog_cb,
                         phase_cb=_phase_cb,
                     )
-                    st.session_state.sync_result = result
+                    _coleta_live["sync_result"] = result
                 except Exception as e:
                     import traceback
                     tb = traceback.format_exc()
-                    st.session_state.sync_error = f"{e}\n\n{tb}"
-                    st.session_state.fase_texto = f"❌ Erro crítico: {e}"
-                    st.session_state.fase_tipo  = "erro"
+                    _coleta_live["sync_error"] = f"{e}\n\n{tb}"
+                    _coleta_live["fase_texto"]  = f"❌ Erro crítico: {e}"
+                    _coleta_live["fase_tipo"]   = "erro"
                 finally:
-                    st.session_state.scraping = False
+                    _coleta_live["scraping"] = False
                     st.session_state.thread_done.set()
 
             threading.Thread(target=_thread_fn, daemon=True).start()
@@ -569,41 +665,108 @@ elif _page == "🔄 Coletar Dados":
         sc = st.session_state.scraper_obj
         if sc:
             sc.stop()
-        st.session_state.scraping   = False
-        st.session_state.fase_texto = "⏹ Coleta interrompida pelo usuário."
-        st.session_state.fase_tipo  = "info"
+        _coleta_live["scraping"]   = False
+        _coleta_live["fase_texto"] = "⏹ Coleta interrompida pelo usuário."
+        _coleta_live["fase_tipo"]  = "info"
+        st.session_state.scraping  = False
 
-    # --- Painel de status ---
-    if st.session_state.fase_texto and st.session_state.fase_texto != "Aguardando início...":
-        fase_css = {
-            "ok":   "phase-box phase-box-ok",
-            "erro": "phase-box phase-box-erro",
-            "info": "phase-box",
-        }.get(st.session_state.fase_tipo, "phase-box")
-        st.markdown(
-            f'<div class="{fase_css}">{st.session_state.fase_texto}</div>',
-            unsafe_allow_html=True,
-        )
-
-    # --- Barra de progresso ---
+    # --- Painel de carregamento ---
     if st.session_state.scraping or st.session_state.sync_result or st.session_state.sync_error:
-        current = st.session_state.prog_current
-        total   = st.session_state.prog_total
-        s       = st.session_state.prog_stats
+        _fase  = st.session_state.fase_texto or ""
+        _cur   = st.session_state.prog_current
+        _tot   = st.session_state.prog_total
+        _s     = st.session_state.prog_stats
+        _ativo = st.session_state.scraping
 
-        if total > 0:
-            pct = min(current / total, 1.0)
-            st.progress(pct, text=f"Fase 2 — Detalhes: {current}/{total} ({int(pct*100)}%)")
-        elif st.session_state.scraping:
-            st.progress(0, text="Fase 1 — Coletando lista de projetos...")
+        # Estado de cada fase
+        if "✅" in _fase or "Concluído" in _fase:
+            _s1, _s2 = "done", "done"
+        elif "❌" in _fase or "Erro" in _fase or "ERRO" in _fase:
+            _s1, _s2 = "done", "erro"
+        elif "⏹" in _fase:
+            _s1, _s2 = "done", "wait"
+        elif _ativo and "listando" in _fase.lower():
+            _s1, _s2 = "active", "wait"
+        elif _ativo:
+            _s1, _s2 = "active", "active"
+        else:
+            _s1, _s2 = "wait", "wait"
 
-        if s:
-            m1, m2, m3, m4, m5 = st.columns(5)
-            m1.metric("✔ Novos",       s.get("novos", 0))
-            m2.metric("↑ Atualizados", s.get("atualizados", 0))
-            m3.metric("⚖️ Pareceres",   s.get("pareceres", 0))
-            m4.metric("🔀 Andamentos",  s.get("andamentos", 0))
-            m5.metric("❌ Erros",       s.get("erros", 0))
+        _pct     = min(_cur / _tot, 1.0) if _tot > 0 else 0.0
+        _pct_int = int(_pct * 100)
+        _ic      = {"done": "✓", "active": "…", "erro": "✕", "wait": "·"}
+
+        _fase_curta = _fase
+        for _pfx in ["📋 Fase 1 — ", "📄 Fase 2 — ", "📋 ", "📄 ", "✅ ", "❌ ", "⏹ ", "⏳ ",
+                     "Fase 1 — ", "Fase 2 — "]:
+            _fase_curta = _fase_curta.replace(_pfx, "")
+        _fase_curta = _fase_curta.strip()
+
+        if _ativo:
+            _dot    = '<div class="pulse-dot"></div>'
+            _titulo = "Coleta em andamento"
+        elif "✅" in _fase or "Concluído" in _fase:
+            _dot    = '<div class="pulse-dot" style="visibility:hidden"></div>'
+            _titulo = "Coleta concluída com sucesso"
+        elif "❌" in _fase or "Erro" in _fase:
+            _dot    = '<div class="pulse-dot" style="visibility:hidden"></div>'
+            _titulo = "Erro durante a coleta"
+        else:
+            _dot    = '<div class="pulse-dot" style="visibility:hidden"></div>'
+            _titulo = "Coleta interrompida"
+
+        _line_cls = "stp-line-done" if _s1 == "done" else "stp-line"
+        # Com total desconhecido (pipeline), mostra contagem simples
+        if not _ativo:
+            # Coleta encerrada — barra estática sem animação
+            _prog_lbl  = f"{_cur:,} projetos processados" if _cur > 0 else "Nenhum projeto processado"
+            _prog_fill = "width:100%" if _cur > 0 else "width:0%"
+        elif _tot > 0:
+            _prog_lbl  = f"{_cur:,} de {_tot:,} projetos processados ({_pct_int}%)"
+            _prog_fill = f"width:{_pct_int}%"
+        elif _cur > 0:
+            _prog_lbl  = f"{_cur:,} projetos processados"
+            _prog_fill = "width:100%;animation:indeterminate 1.8s ease-in-out infinite"
+        else:
+            _prog_lbl  = "Aguardando primeiro projeto..."
+            _prog_fill = "width:30%;animation:indeterminate 1.8s ease-in-out infinite"
+
+        st.markdown(f"""
+<div class="loading-card">
+  <div class="loading-header">
+    {_dot}
+    <div>
+      <div class="loading-title">{_titulo}</div>
+      <div class="loading-sub">{_fase_curta[:150]}</div>
+    </div>
+  </div>
+
+  <div class="stepper">
+    <div class="stp stp-{_s1}">
+      <div class="stp-circle">{_ic[_s1]}</div>
+      <div class="stp-lbl">Fase 1<br>Listagem</div>
+    </div>
+    <div class="{_line_cls}"></div>
+    <div class="stp stp-{_s2}">
+      <div class="stp-circle">{_ic[_s2]}</div>
+      <div class="stp-lbl">Fase 2<br>Detalhes</div>
+    </div>
+  </div>
+
+  <div class="prog-wrap">
+    <div class="prog-fill" style="{_prog_fill}"></div>
+  </div>
+  <div class="prog-label">{_prog_lbl}</div>
+
+  <div class="stat-row">
+    <div class="stat-chip"><span class="stat-chip-val c-green">{_s.get('novos',0):,}</span>&nbsp;novos</div>
+    <div class="stat-chip"><span class="stat-chip-val c-blue">{_s.get('atualizados',0):,}</span>&nbsp;atualizados</div>
+    <div class="stat-chip"><span class="stat-chip-val c-purple">{_s.get('pareceres',0):,}</span>&nbsp;pareceres</div>
+    <div class="stat-chip"><span class="stat-chip-val c-orange">{_s.get('andamentos',0):,}</span>&nbsp;andamentos</div>
+    <div class="stat-chip"><span class="stat-chip-val c-red">{_s.get('erros',0):,}</span>&nbsp;erros</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
     # --- Log em tempo real ---
     if st.session_state.log_lines or st.session_state.scraping:
@@ -661,7 +824,7 @@ elif _page == "🔄 Coletar Dados":
         )
 
     if st.session_state.scraping:
-        time.sleep(1.5)
+        time.sleep(1.0)
         st.rerun()
 
 # ===========================================================================
