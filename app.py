@@ -1083,19 +1083,46 @@ def _extrair_projetos_pauta(texto: str) -> list:
 
 
 def _buscar_projeto_db(numero: str) -> dict | None:
-    """Busca projeto no banco pelo número, tentando variantes."""
+    """Busca projeto no banco pelo número, tentando variantes.
+
+    Retorna o dict da linha com chave extra '_numero_encontrado' indicando
+    o número real que foi encontrado (pode diferir de `numero` quando há fallback).
+    """
     conn = db.get_connection()
     try:
+        # 1. Correspondência exata
         row = conn.execute(
             "SELECT * FROM projetos WHERE numero = ? LIMIT 1", (numero,)
         ).fetchone()
-        if not row:
-            base = _re.sub(r"-[A-Z](?=/)", "", numero)
+        if row:
+            result = dict(row)
+            result["_numero_encontrado"] = numero
+            return result
+
+        # 2. Remove sufixo de substitutivo (ex: "5137-A/2025" → "5137/2025") e tenta exato
+        base = _re.sub(r"-[A-Z](?=/)", "", numero)
+        row = conn.execute(
+            "SELECT * FROM projetos WHERE numero = ? LIMIT 1", (base,)
+        ).fetchone()
+        if row:
+            result = dict(row)
+            result["_numero_encontrado"] = base
+            return result
+
+        # 3. Variantes com sufixo ancorando pelo número para não casar
+        #    "1899/2023" quando buscamos "899/2023"
+        parts = base.split("/")
+        if len(parts) == 2:
             row = conn.execute(
-                "SELECT * FROM projetos WHERE numero = ? OR numero LIKE ? LIMIT 1",
-                (base, f"%{base}%"),
+                "SELECT * FROM projetos WHERE numero LIKE ? LIMIT 1",
+                (f"{parts[0]}%/{parts[1]}",),
             ).fetchone()
-        return dict(row) if row else None
+            if row:
+                result = dict(row)
+                result["_numero_encontrado"] = result.get("numero", base)
+                return result
+
+        return None
     finally:
         conn.close()
 
@@ -1271,15 +1298,20 @@ if _page == "📅 Pauta":
 
                     # Resumo
                     _tot     = len(_relatorio)
-                    _ok      = sum(1 for r in _relatorio if r["db"] and r["status_autor"] != "diverge" and r["status_ementa"] != "diverge")
+                    _subst   = sum(
+                        1 for r in _relatorio
+                        if r["db"] and r["db"].get("_numero_encontrado", r["p"]["numero"]) != r["p"]["numero"]
+                    )
+                    _ok      = sum(1 for r in _relatorio if r["db"] and r["status_autor"] != "diverge" and r["status_ementa"] != "diverge" and r["db"].get("_numero_encontrado", r["p"]["numero"]) == r["p"]["numero"])
                     _div     = sum(1 for r in _relatorio if r["db"] and (r["status_autor"] == "diverge" or r["status_ementa"] == "diverge"))
                     _nao_enc = sum(1 for r in _relatorio if not r["db"])
 
-                    _s1, _s2, _s3, _s4 = st.columns(4)
+                    _s1, _s2, _s3, _s4, _s5 = st.columns(5)
                     _s1.metric("Projetos na pauta", _tot)
                     _s2.metric("✅ Conferidos", _ok)
                     _s3.metric("⚠️ Com divergência", _div)
-                    _s4.metric("❓ Não encontrados", _nao_enc)
+                    _s4.metric("🔄 Substitutivos", _subst)
+                    _s5.metric("❓ Não encontrados", _nao_enc)
 
                     st.divider()
 
@@ -1291,11 +1323,16 @@ if _page == "📅 Pauta":
                         _ia = _ICONE[_r["status_autor"]]
                         _ie = _ICONE[_r["status_ementa"]]
 
-                        _tem_diverge = "diverge" in (_r["status_autor"], _r["status_ementa"])
-                        _tem_pont    = "ok_pont" in (_r["status_autor"], _r["status_ementa"])
+                        _tem_diverge   = "diverge" in (_r["status_autor"], _r["status_ementa"])
+                        _tem_pont      = "ok_pont" in (_r["status_autor"], _r["status_ementa"])
+                        # Verifica se houve fallback para o projeto base (substitutivo não está no banco)
+                        _num_encontrado = (_db or {}).get("_numero_encontrado", _p["numero"])
+                        _eh_substitutivo = _db is not None and _num_encontrado != _p["numero"]
 
                         if not _db:
                             _titulo_rel = f"❓ {_p['numero']} — Não encontrado no banco de dados"
+                        elif _eh_substitutivo:
+                            _titulo_rel = f"🔄 {_p['numero']} — Substitutivo sem entrada própria no banco (encontrado como {_num_encontrado})"
                         elif _tem_diverge:
                             _titulo_rel = f"⚠️ {_p['numero']} — Divergência detectada"
                         elif _tem_pont:
@@ -1303,7 +1340,7 @@ if _page == "📅 Pauta":
                         else:
                             _titulo_rel = f"✅ {_p['numero']} — Conferido"
 
-                        _expand = not _db or _tem_diverge or _tem_pont
+                        _expand = not _db or _tem_diverge or _tem_pont or _eh_substitutivo
                         with st.expander(_titulo_rel, expanded=_expand):
                             if not _db:
                                 st.error("Projeto não encontrado no banco de dados.")
@@ -1312,6 +1349,13 @@ if _page == "📅 Pauta":
                                 if _p.get("ementa_doc"):
                                     st.markdown(f"**Ementa (pauta):** {_p['ementa_doc']}")
                             else:
+                                if _eh_substitutivo:
+                                    st.warning(
+                                        f"O banco não possui entrada para **{_p['numero']}** (substitutivo). "
+                                        f"A conferência foi feita com **{_num_encontrado}** (texto original). "
+                                        "A ementa do substitutivo pode diferir — verifique manualmente."
+                                    )
+
                                 _col_a, _col_e = st.columns(2)
 
                                 with _col_a:
@@ -1327,6 +1371,8 @@ if _page == "📅 Pauta":
                                     _label_e = f"**{_ie} Ementa**"
                                     if _r["status_ementa"] == "ok_pont":
                                         _label_e += " *(só pontuação)*"
+                                    elif _eh_substitutivo:
+                                        _label_e += " *(texto original — pode diferir)*"
                                     st.markdown(_label_e)
                                     if _p.get("ementa_doc"):
                                         st.caption(f"**Pauta:** {_p['ementa_doc'][:200]}")

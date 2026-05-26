@@ -1,3 +1,6 @@
+[browser]
+gatherUsageStats = false
+
 [theme]
 base            = "dark"
 backgroundColor          = "#0a0a0f"

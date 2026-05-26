@@ -73,7 +73,7 @@ ENCODINGS = ["windows-1252", "latin-1", "utf-8", "iso-8859-1"]
 
 DATE_RE      = re.compile(r"\b(\d{2}/\d{2}/\d{4})\b")
 ANO_RE       = re.compile(r"\b(20\d{2}|19\d{2})\b")
-NUMERO_RE    = re.compile(r"[Nn][º°\.]\s*(\d+/\d{4})")
+NUMERO_RE    = re.compile(r"[Nn][º°\.]\s*(\d+(?:-[A-Z])?/\d{4})")
 EMENTA_RE    = re.compile(r"EMENTA\s*[:：]\s*(.+?)(?=\s*Autor\(es\)|\s*JUSTIFICATIVA|$)", re.DOTALL)
 AUTOR_RE     = re.compile(r"Autor\(es\)\s*:\s*(?:Deputad[oa]s?\s+)?([A-ZÁÉÍÓÚÀÈÌÒÙÂÊÎÔÛÃÕÇ,\s]+?)(?=\s*A ASSEMBLEIA|\s*RESOLVE|$)", re.DOTALL)
 # ---------------------------------------------------------------------------
@@ -852,6 +852,14 @@ class ALERJScraper:
                     for k, v in detail.items():
                         if k not in ("andamento", "pareceres") and v is not None:
                             project_data[k] = v
+                    # Protege sufixo: se a lista trouxe "5137-A/2025" mas o detalhe
+                    # parseou apenas "5137/2025" (regex sem sufixo), mantém o da lista.
+                    _suffix_re = re.compile(r"-[A-Z]/")
+                    if quick.get("numero") and _suffix_re.search(quick["numero"]):
+                        detail_num = detail.get("numero") or ""
+                        if not _suffix_re.search(detail_num):
+                            project_data["numero"] = quick["numero"]
+                            self.log(f"  [INFO] Número preservado da lista: {quick['numero']}")
                 else:
                     project_data = quick
                     stats["erros"] += 1
