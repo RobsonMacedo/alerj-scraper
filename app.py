@@ -47,7 +47,7 @@ st.set_page_config(
     page_title="ALERJ — Acompanhamento Legislativo",
     page_icon="🏛️",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 TODAS_LEGISLATURAS = list(LEGISLATURAS.keys())   # ["2023-2027", "2019-2023", ...]
@@ -58,48 +58,128 @@ TODAS_LEGISLATURAS = list(LEGISLATURAS.keys())   # ["2023-2027", "2019-2023", ..
 
 st.markdown("""
 <style>
-[data-testid="stMetricValue"] { font-size: 1.8rem; }
-.log-box {
-    background: #0d1117;
-    color: #e6edf3;
-    font-family: 'Courier New', monospace;
-    font-size: 12px;
-    padding: 12px;
-    border-radius: 6px;
-    max-height: 380px;
-    overflow-y: auto;
-    white-space: pre-wrap;
-    word-break: break-all;
-    border: 1px solid #30363d;
+/* ── Base ─────────────────────────────────────────────────────────────────── */
+[data-testid="stApp"] { background-color: #0a0a0f; }
+.main .block-container  { padding-top: 2rem; padding-left: 2rem; padding-right: 2rem; max-width: 1400px; }
+
+/* ── Sidebar ──────────────────────────────────────────────────────────────── */
+[data-testid="stSidebar"] { background-color: #0d0d17 !important; border-right: 1px solid #1a1a2e; }
+[data-testid="stSidebarContent"] { padding-top: 1.5rem; }
+
+.sidebar-brand { display:flex; align-items:center; gap:10px; padding:0 4px 2px 4px; }
+.brand-icon    { font-size:1.8rem; }
+.brand-text    { font-size:1.35rem; font-weight:700; color:#f4f4f5; letter-spacing:-0.5px; }
+.brand-caption { font-size:0.7rem; color:#52525b; padding:0 4px; margin:0 0 4px 0; }
+
+/* ── Sidebar nav radio ────────────────────────────────────────────────────── */
+[data-testid="stSidebar"] .stRadio [data-testid="stWidgetLabel"] { display:none; }
+[data-testid="stSidebar"] .stRadio > div { display:flex; flex-direction:column; gap:2px; }
+[data-testid="stSidebar"] .stRadio label {
+    padding: 10px 12px !important; border-radius: 8px !important;
+    color: #71717a !important; font-size: 0.88rem !important;
+    font-weight: 500 !important; cursor: pointer !important;
+    transition: all 0.15s ease !important; margin: 0 !important;
 }
-.log-line-novo       { color: #3fb950; }
-.log-line-atualizado { color: #58a6ff; }
-.log-line-erro       { color: #f85149; }
-.log-line-aviso      { color: #d29922; }
-.log-line-info       { color: #8b949e; }
-.phase-box      { background:#161b22; border-left:4px solid #58a6ff;
-                  padding:10px 14px; border-radius:4px;
+[data-testid="stSidebar"] .stRadio label:hover { background:#1a1a2e !important; color:#a1a1aa !important; }
+[data-testid="stSidebar"] .stRadio [data-baseweb="radio"] > div:first-child { display:none !important; }
+[data-testid="stSidebar"] .stRadio [data-checked="true"] ~ div,
+[data-testid="stSidebar"] .stRadio [aria-checked="true"] { color:#10b981 !important; }
+[data-testid="stSidebar"] .stRadio [data-checked="true"] + label,
+[data-testid="stSidebar"] .stRadio input:checked + div + div { color:#10b981 !important; }
+
+/* ── Metric cards ─────────────────────────────────────────────────────────── */
+[data-testid="stMetric"] {
+    background:#12121a !important; border:1px solid #1a1a2e !important;
+    border-radius:12px !important; padding:18px 22px !important;
+}
+[data-testid="stMetricLabel"] p { color:#71717a !important; font-size:0.75rem !important; text-transform:uppercase; letter-spacing:.06em; }
+[data-testid="stMetricValue"]   { color:#f4f4f5 !important; font-size:2rem !important; font-weight:700 !important; }
+
+/* ── Containers / borders ─────────────────────────────────────────────────── */
+div[data-testid="stVerticalBlockBorderWrapper"] {
+    background:#12121a !important; border-color:#1a1a2e !important; border-radius:12px !important;
+}
+
+/* ── Expanders ────────────────────────────────────────────────────────────── */
+[data-testid="stExpander"] { background:#12121a !important; border:1px solid #1a1a2e !important; border-radius:12px !important; }
+[data-testid="stExpander"] summary { color:#a1a1aa !important; }
+
+/* ── Buttons ──────────────────────────────────────────────────────────────── */
+.stButton > button { border-radius:8px !important; font-weight:500 !important; transition:all .15s !important; }
+.stButton > button[kind="primary"]   { background:#10b981 !important; border-color:#10b981 !important; color:#fff !important; }
+.stButton > button[kind="primary"]:hover { background:#059669 !important; border-color:#059669 !important; }
+.stButton > button[kind="secondary"] { background:#12121a !important; border-color:#1a1a2e !important; color:#a1a1aa !important; }
+.stButton > button[kind="secondary"]:hover { background:#1a1a2e !important; color:#f4f4f5 !important; }
+[data-testid="stSidebar"] .stButton > button,
+[data-testid="stSidebar"] .stDownloadButton button {
+    background:#12121a !important; border:1px solid #1a1a2e !important;
+    color:#a1a1aa !important; border-radius:8px !important; font-size:.82rem !important;
+}
+[data-testid="stSidebar"] .stButton > button:hover,
+[data-testid="stSidebar"] .stDownloadButton button:hover { background:#1a1a2e !important; color:#f4f4f5 !important; }
+
+/* ── Inputs ───────────────────────────────────────────────────────────────── */
+.stTextInput input  { background:#12121a !important; border-color:#1a1a2e !important; color:#f4f4f5 !important; border-radius:8px !important; }
+.stTextInput input:focus { border-color:#10b981 !important; box-shadow:0 0 0 1px #10b981 !important; }
+.stSelectbox [data-baseweb="select"] > div { background:#12121a !important; border-color:#1a1a2e !important; border-radius:8px !important; }
+.stMultiSelect [data-baseweb="select"] > div { background:#12121a !important; border-color:#1a1a2e !important; border-radius:8px !important; }
+
+/* ── Slider / Progress ────────────────────────────────────────────────────── */
+.stProgress [data-baseweb="progress-bar"] > div { background:#10b981 !important; }
+
+/* ── Tabs (sub-tabs internas) ─────────────────────────────────────────────── */
+[data-testid="stTabs"] [role="tablist"] { background:#12121a !important; border-bottom:1px solid #1a1a2e !important; padding:6px 8px !important; border-radius:10px 10px 0 0; }
+[data-testid="stTabs"] button[role="tab"] { background:transparent !important; color:#71717a !important; border-radius:6px !important; border:none !important; padding:10px 28px !important; font-size:0.88rem !important; min-width:120px !important; margin:0 4px !important; }
+[data-testid="stTabs"] button[role="tab"][aria-selected="true"] { background:#1a1a2e !important; color:#10b981 !important; }
+
+/* ── DataFrames ───────────────────────────────────────────────────────────── */
+[data-testid="stDataFrame"] { border-radius:12px !important; overflow:hidden !important; border:1px solid #1a1a2e !important; }
+
+/* ── File uploader ────────────────────────────────────────────────────────── */
+[data-testid="stFileUploaderDropzone"] { background:#12121a !important; border-color:#1a1a2e !important; border-radius:10px !important; }
+
+/* ── Divider / HR ─────────────────────────────────────────────────────────── */
+hr { border-color:#1a1a2e !important; }
+
+/* ── Alerts ───────────────────────────────────────────────────────────────── */
+[data-testid="stAlert"] { border-radius:10px !important; }
+
+/* ── Log / phase / tramitação boxes ──────────────────────────────────────── */
+.log-box {
+    background:#0d0d15; color:#e6edf3;
+    font-family:'Courier New',monospace; font-size:12px;
+    padding:12px; border-radius:10px; max-height:380px;
+    overflow-y:auto; white-space:pre-wrap; word-break:break-all;
+    border:1px solid #1a1a2e;
+}
+.log-line-novo       { color:#10b981; }
+.log-line-atualizado { color:#60a5fa; }
+.log-line-erro       { color:#f87171; }
+.log-line-aviso      { color:#fb923c; }
+.log-line-info       { color:#52525b; }
+.phase-box      { background:#12121a; border-left:4px solid #60a5fa;
+                  padding:10px 14px; border-radius:8px; border:1px solid #1a1a2e;
                   font-family:'Courier New',monospace; font-size:13px;
                   color:#e6edf3; margin-bottom:8px; }
-.phase-box-ok   { border-left-color:#3fb950; }
-.phase-box-erro { border-left-color:#f85149; }
+.phase-box-ok   { border-left-color:#10b981; }
+.phase-box-erro { border-left-color:#f87171; }
 .tram-box {
-    background:#0d1117; border:1px solid #30363d; border-radius:6px;
+    background:#0d0d15; border:1px solid #1a1a2e; border-radius:10px;
     padding:6px; max-height:500px; overflow-y:auto;
     font-family:'Courier New',monospace; font-size:12px; }
 .tram-row {
-    display:flex; border-bottom:1px solid #161b22;
+    display:flex; border-bottom:1px solid #1a1a2e;
     padding:3px 6px; gap:8px; align-items:flex-start; }
 .tram-desc  { flex:1; word-break:break-word; }
-.tram-date  { min-width:72px; color:#6e7681; text-align:right; flex-shrink:0; }
-.tram-dist  { color:#58a6ff; }
-.tram-ok    { color:#3fb950; }
-.tram-no    { color:#f85149; }
-.tram-final { color:#ffa657; font-weight:bold; }
-.tram-arch  { color:#6e7681; }
-.tram-def   { color:#c9d1d9; }
-.par-pend   { color:#d29922; }
-.par-ok     { color:#3fb950; }
+.tram-date  { min-width:72px; color:#52525b; text-align:right; flex-shrink:0; }
+.tram-dist  { color:#60a5fa; }
+.tram-ok    { color:#10b981; }
+.tram-no    { color:#f87171; }
+.tram-final { color:#fb923c; font-weight:bold; }
+.tram-arch  { color:#52525b; }
+.tram-def   { color:#a1a1aa; }
+.par-pend   { color:#fb923c; }
+.par-ok     { color:#10b981; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -131,21 +211,27 @@ def _init_state():
 _init_state()
 
 # ---------------------------------------------------------------------------
-# Título
+# Sidebar — navegação principal
 # ---------------------------------------------------------------------------
+with st.sidebar:
+    st.markdown("""
+    <div class="sidebar-brand">
+        <span class="brand-icon">🏛️</span>
+        <span class="brand-text">ALERJ</span>
+    </div>
+    <p class="brand-caption">Acompanhamento Legislativo</p>
+    """, unsafe_allow_html=True)
 
-st.markdown("# 🏛️ ALERJ — Acompanhamento Legislativo")
-st.caption(
-    "Coleta e acompanhamento de projetos de lei, projetos de resolução "
-    "e pareceres das comissões — Assembleia Legislativa do Estado do Rio de Janeiro."
-)
+    _page = st.radio(
+        "Navegação",
+        ["📊 Dashboard", "🔄 Coletar Dados", "📋 Projetos", "📜 Histórico", "📅 Pauta"],
+        label_visibility="collapsed",
+        key="nav_radio",
+    )
 
-# ---------------------------------------------------------------------------
-# Exportar / Importar banco de dados
-# ---------------------------------------------------------------------------
-_ecol, _icol, _ = st.columns([1.4, 1.4, 5])
+    st.divider()
+    st.caption("Banco de dados")
 
-with _ecol:
     _db_path = db.DB_PATH
     if _db_path.exists():
         try:
@@ -159,7 +245,7 @@ with _ecol:
                 use_container_width=True,
                 help="Baixa o arquivo SQLite completo com todos os dados coletados.",
             )
-        except Exception as _ex:
+        except Exception:
             st.button("⬇ Exportar Banco", disabled=True, use_container_width=True)
     else:
         st.button(
@@ -167,7 +253,6 @@ with _ecol:
             help="Banco ainda não criado. Execute a coleta primeiro.",
         )
 
-with _icol:
     if st.button(
         "⬆ Importar Banco",
         use_container_width=True,
@@ -179,14 +264,15 @@ with _icol:
         st.session_state.import_ok   = False
         st.rerun()
 
-# Mensagem de resultado da importação
+# ---------------------------------------------------------------------------
+# Mensagem de resultado da importação + painel (área principal)
+# ---------------------------------------------------------------------------
 if st.session_state.import_msg:
     if st.session_state.import_ok:
         st.success(st.session_state.import_msg)
     else:
         st.error(st.session_state.import_msg)
 
-# Painel de importação
 if st.session_state.show_import and not st.session_state.scraping:
     with st.container(border=True):
         st.markdown("#### ⬆ Importar Banco de Dados")
@@ -217,7 +303,6 @@ if st.session_state.show_import and not st.session_state.scraping:
 
         if _confirm and _uploaded_db is not None:
             _raw = _uploaded_db.read()
-            # Valida cabeçalho SQLite
             if not _raw[:16].startswith(b"SQLite format 3"):
                 st.session_state.import_msg = "❌ Arquivo inválido — não é um banco SQLite."
                 st.session_state.import_ok  = False
@@ -225,12 +310,10 @@ if st.session_state.show_import and not st.session_state.scraping:
             else:
                 try:
                     _db_path.parent.mkdir(parents=True, exist_ok=True)
-                    # Backup do banco atual
                     if _db_path.exists():
                         _bk = _db_path.parent / "alerj_backup.db"
                         import shutil
                         shutil.copy2(str(_db_path), str(_bk))
-                    # Substitui
                     _db_path.write_bytes(_raw)
                     db.init_db()
                     _stats_new = db.get_stats()
@@ -247,20 +330,10 @@ if st.session_state.show_import and not st.session_state.scraping:
                     st.session_state.show_import = False
             st.rerun()
 
-st.divider()
-
-tabs = st.tabs([
-    "📊 Dashboard",
-    "🔄 Coletar Dados",
-    "📋 Projetos",
-    "📜 Histórico",
-    "📅 Pauta",
-])
-
 # ===========================================================================
 # TAB 1 — Dashboard
 # ===========================================================================
-with tabs[0]:
+if _page == "📊 Dashboard":
     st.subheader("Resumo do banco de dados")
 
     stats_db = db.get_stats()
@@ -340,7 +413,7 @@ with tabs[0]:
 # ===========================================================================
 # TAB 2 — Coletar Dados
 # ===========================================================================
-with tabs[1]:
+elif _page == "🔄 Coletar Dados":
     st.subheader("Coleta Incremental de Dados")
 
     with st.expander("⚙️ Configurações de coleta", expanded=True):
@@ -594,7 +667,7 @@ with tabs[1]:
 # ===========================================================================
 # TAB 3 — Projetos (abas por legislatura)
 # ===========================================================================
-with tabs[2]:
+elif _page == "📋 Projetos":
     st.subheader("Projetos Legislativos")
 
     # Filtros globais (aplicados em todas as sub-abas)
@@ -882,7 +955,7 @@ with tabs[2]:
 # ===========================================================================
 # TAB 4 — Histórico
 # ===========================================================================
-with tabs[3]:
+elif _page == "📜 Histórico":
     st.subheader("Histórico de Sincronizações")
 
     if st.button("🔄 Atualizar"):
@@ -1058,7 +1131,7 @@ def _conferir(val_doc: str | None, val_db: str | None) -> str:
         return "ok"
     return "diverge"
 
-with tabs[4]:
+if _page == "📅 Pauta":
     st.subheader("Pauta")
     st.caption("Envie arquivos de pauta (PDF ou Word) para armazenamento e análise posterior.")
 
@@ -1067,6 +1140,17 @@ with tabs[4]:
     # ── Upload ───────────────────────────────────────────────────────────────
     if "pauta_upload_key" not in st.session_state:
         st.session_state.pauta_upload_key = 0
+    if "pauta_msg" not in st.session_state:
+        st.session_state.pauta_msg = None
+    if "pauta_msg_ok" not in st.session_state:
+        st.session_state.pauta_msg_ok = True
+
+    if st.session_state.pauta_msg:
+        if st.session_state.pauta_msg_ok:
+            st.success(st.session_state.pauta_msg)
+        else:
+            st.error(st.session_state.pauta_msg)
+        st.session_state.pauta_msg = None
 
     with st.container(border=True):
         st.markdown("#### ⬆ Enviar arquivo")
@@ -1082,12 +1166,14 @@ with tabs[4]:
                 if st.button("Substituir", type="primary", key="sub_pauta"):
                     _dest.write_bytes(_uploaded.getvalue())
                     st.session_state.pauta_upload_key += 1
-                    st.success(f"✅ **{_uploaded.name}** substituído com sucesso.")
+                    st.session_state.pauta_msg = f"✅ **{_uploaded.name}** substituído com sucesso."
+                    st.session_state.pauta_msg_ok = True
                     st.rerun()
             else:
                 _dest.write_bytes(_uploaded.getvalue())
                 st.session_state.pauta_upload_key += 1
-                st.success(f"✅ **{_uploaded.name}** salvo com sucesso.")
+                st.session_state.pauta_msg = f"✅ **{_uploaded.name}** salvo com sucesso."
+                st.session_state.pauta_msg_ok = True
                 st.rerun()
 
     # ── Lista de arquivos ────────────────────────────────────────────────────
