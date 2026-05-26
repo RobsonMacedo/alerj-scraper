@@ -1,0 +1,31 @@
+# fly.toml — gerado para deploy no Fly.io
+# Documentação: https://fly.io/docs/reference/configuration/
+
+app = "alerj-scraper"
+primary_region = "gru"
+
+[build]
+
+[env]
+  PYTHONUNBUFFERED = "1"
+
+[http_service]
+  internal_port = 8501
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 25
+    soft_limit = 20
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
+
+[[mounts]]
+  source = "alerj_data"
+  destination = "/app/data"
