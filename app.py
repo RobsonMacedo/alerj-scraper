@@ -1712,9 +1712,7 @@ if _page == "📅 Pauta":
                                 _p.get("relator_doc"), _pareceres_db
                             )
                         _pars_doc = _p.get("pareceres_doc", [])
-                        _par_comp: list = []
-                        if _pars_doc and _pareceres_db:
-                            _par_comp = _comparar_pareceres_doc_db(_pars_doc, _pareceres_db)
+                        _par_comp = _comparar_pareceres_doc_db(_pars_doc, _pareceres_db)
                         _relatorio.append({
                             "p":              _p,
                             "db":             _db_row,
@@ -1736,18 +1734,18 @@ if _page == "📅 Pauta":
                     )
                     _par_div = sum(
                         1 for r in _relatorio
-                        if any(c.get("status") == "diverge" for c in r.get("parecer_comp", []))
+                        if any(c.get("status") in ("diverge", "sem_db") for c in r.get("parecer_comp", []))
                     )
                     _div     = sum(1 for r in _relatorio if r["db"] and (
                         r["status_autor"] == "diverge" or
                         r["status_ementa"] == "diverge" or
-                        any(c.get("status") == "diverge" for c in r.get("parecer_comp", []))
+                        any(c.get("status") in ("diverge", "sem_db") for c in r.get("parecer_comp", []))
                     ))
                     _rel_div = sum(1 for r in _relatorio if r.get("status_relator") == "diverge")
                     _nao_enc = sum(1 for r in _relatorio if not r["db"])
                     _ok      = sum(1 for r in _relatorio if r["db"] and
                         r["status_autor"] != "diverge" and r["status_ementa"] != "diverge" and
-                        not any(c.get("status") == "diverge" for c in r.get("parecer_comp", [])) and
+                        not any(c.get("status") in ("diverge", "sem_db") for c in r.get("parecer_comp", [])) and
                         r["db"].get("_numero_encontrado", r["p"]["numero"]) == r["p"]["numero"])
 
                     _s1, _s2, _s3, _s4, _s5, _s6, _s7 = st.columns(7)
@@ -1772,7 +1770,7 @@ if _page == "📅 Pauta":
                         _tem_diverge     = "diverge" in (_r["status_autor"], _r["status_ementa"])
                         _tem_pont        = "ok_pont" in (_r["status_autor"], _r["status_ementa"])
                         _tem_rel_div     = _r.get("status_relator") == "diverge"
-                        _tem_par_div     = any(c.get("status") == "diverge" for c in _r.get("parecer_comp", []))
+                        _tem_par_div     = any(c.get("status") in ("diverge", "sem_db") for c in _r.get("parecer_comp", []))
                         # Verifica se houve fallback para o projeto base (substitutivo não está no banco)
                         _num_encontrado  = (_db or {}).get("_numero_encontrado", _p["numero"])
                         _eh_substitutivo = _db is not None and _num_encontrado != _p["numero"]
@@ -1841,79 +1839,42 @@ if _page == "📅 Pauta":
                                 _pars_doc = _r.get("pareceres_doc", [])
                                 _comp     = _r.get("parecer_comp", [])
 
-                                if _pars_db or _pars_doc:
+                                if _pars_db or _pars_doc or _comp:
                                     st.markdown("---")
                                     st.markdown("**📋 Comissões e Pareceres**")
 
-                                    if _comp:
-                                        # Exibição comparativa agrupada por objeto
-                                        _objetos_exib = sorted({c.get("objeto","Proposição") for c in _comp},
-                                                               key=lambda x: (x != "Proposição", x))
-                                        for _obj in _objetos_exib:
-                                            _grupo = [c for c in _comp if c.get("objeto","Proposição") == _obj]
-                                            _pendentes = [c for c in _grupo
-                                                          if (c.get("db") or {}).get("tipo_parecer","") in
-                                                             ("Aguardando parecer","") and not c.get("diverge_tipo")]
-                                            st.markdown(f"**📌 {_obj}**")
-                                            for _c in _grupo:
-                                                _cpd  = _c.get("doc")
-                                                _cpdb = _c.get("db")
-                                                _cst  = _c.get("status")
-                                                _com_nome = (_cpd or _cpdb or {}).get("comissao") or "—"
-                                                _aguard = (_cpdb or {}).get("tipo_parecer","") in ("Aguardando parecer","")
-                                                if _aguard and _cst != "diverge":
-                                                    _ico_st = "⏳"
-                                                else:
-                                                    _ico_st = {"ok":"✅","diverge":"❌","sem_db":"⚠️","sem_doc":"📋"}.get(_cst,"—")
-                                                st.markdown(f"{_ico_st} **{_com_nome}**")
-                                                if _cpd and _cpdb:
-                                                    _cc1, _cc2 = st.columns(2)
-                                                    with _cc1:
-                                                        st.caption("**Documento (pauta)**")
-                                                        _t_d = _cpd.get("tipo_parecer") or "—"
-                                                        _r_d = _cpd.get("relator") or "—"
-                                                        st.markdown(f"Parecer: **{_t_d}**" + (" ⚠️" if _c.get("diverge_tipo") else ""))
-                                                        st.markdown(f"Relator: {_r_d}" + (" ⚠️" if _c.get("diverge_rel") else ""))
-                                                    with _cc2:
-                                                        st.caption("**Banco de dados**")
-                                                        _t_db  = _cpdb.get("tipo_parecer") or "—"
-                                                        _r_db  = _cpdb.get("relator") or "—"
-                                                        _dt_db = _cpdb.get("data") or "—"
-                                                        st.markdown(f"Parecer: {_icone_parecer(_t_db)} **{_t_db}**")
-                                                        st.markdown(f"Relator: {_r_db}")
-                                                        st.caption(f"Data: {_dt_db}")
-                                                elif _cpd:
-                                                    st.caption(f"⚠️ Apenas no documento — Parecer: {_cpd.get('tipo_parecer') or '—'} | Relator: {_cpd.get('relator') or '—'}")
-                                                    st.caption("Não encontrado no banco de dados.")
-                                                elif _cpdb:
-                                                    _t_db  = _cpdb.get("tipo_parecer") or "—"
-                                                    _r_db  = _cpdb.get("relator") or "—"
-                                                    _dt_db = _cpdb.get("data") or "—"
-                                                    if _aguard:
-                                                        st.caption(f"⏳ Pendente — Relator designado: {_r_db} | Data: {_dt_db}")
-                                                    else:
-                                                        st.caption(f"📋 Apenas no banco — {_icone_parecer(_t_db)} {_t_db} | Relator: {_r_db} | Data: {_dt_db}")
-                                    else:
-                                        # Sem pareceres no documento: mostra os do banco agrupados por objeto
-                                        _objetos_db = sorted({p.get("objeto","Proposição") for p in _pars_db},
-                                                             key=lambda x: (x != "Proposição", x))
-                                        for _obj in _objetos_db:
-                                            _grp = [p for p in _pars_db if p.get("objeto","Proposição") == _obj]
-                                            if len(_objetos_db) > 1:
-                                                st.markdown(f"**📌 {_obj}**")
-                                            for _par in _grp:
-                                                _com   = _par.get("comissao") or "—"
-                                                _rel   = _par.get("relator")  or "—"
-                                                _tipo  = _par.get("tipo_parecer") or "Aguardando parecer"
-                                                _data  = _par.get("data") or "—"
-                                                _ico   = _icone_parecer(_tipo)
-                                                _pend  = _tipo in ("Aguardando parecer", "")
-                                                st.markdown(
-                                                    f"{_ico} **{_com}**  \n"
-                                                    f"&nbsp;&nbsp;&nbsp;&nbsp;Relator: `{_rel}` &nbsp;|&nbsp; "
-                                                    f"{'⏳ ' if _pend else ''}Parecer: *{_tipo}* &nbsp;|&nbsp; Data: {_data}",
-                                                    unsafe_allow_html=True,
-                                                )
+                                    _STATUS_LABEL = {
+                                        "ok":      "✅ Conferido",
+                                        "diverge": "❌ Divergência",
+                                        "sem_db":  "❌ Não está no banco",
+                                        "sem_doc": "📋 Só no banco",
+                                    }
+                                    _tbl_rows = []
+                                    for _c in _comp:
+                                        _cpd  = _c.get("doc") or {}
+                                        _cpdb = _c.get("db") or {}
+                                        _cst  = _c.get("status", "")
+                                        _obj  = _c.get("objeto", "Proposição")
+                                        _com_nome = _cpd.get("comissao") or _cpdb.get("comissao") or "—"
+                                        _tp_banco = _cpdb.get("tipo_parecer") or ""
+                                        _aguard   = _tp_banco in ("Aguardando parecer", "", None)
+                                        if _cst == "sem_doc" and _aguard:
+                                            _st_lbl = "⏳ Pendente"
+                                        else:
+                                            _st_lbl = _STATUS_LABEL.get(_cst, "—")
+                                        _tbl_rows.append({
+                                            "Objeto":           _obj,
+                                            "Comissão":         _com_nome,
+                                            "Parecer (doc)":    _cpd.get("tipo_parecer") or "—",
+                                            "Relator (doc)":    _cpd.get("relator")      or "—",
+                                            "Parecer (banco)":  _icone_parecer(_tp_banco) + " " + (_tp_banco or "—"),
+                                            "Relator (banco)":  _cpdb.get("relator")     or "—",
+                                            "Data (banco)":     _cpdb.get("data")        or "—",
+                                            "Status":           _st_lbl,
+                                        })
+                                    if _tbl_rows:
+                                        _df_par = pd.DataFrame(_tbl_rows)
+                                        st.dataframe(_df_par, use_container_width=True, hide_index=True)
 
                                     # Relator do documento (conferência global, só se sem comp. por comissão)
                                     _rel_doc_p = _r["p"].get("relator_doc")
