@@ -511,6 +511,12 @@ def _extract_pareceres(soup: BeautifulSoup) -> List[Dict]:
                 if "=>" in c and len(c.split("=>")[0].strip()) <= 80:
                     all_cells_with_date.append((c, date_val))
 
+    def _get_objeto(c_norm: str, relator_n: str) -> str:
+        rel_pos = c_norm.find(relator_n) if relator_n else -1
+        par_pos = c_norm.find("parecer:")
+        trecho  = c_norm[rel_pos:par_pos] if (rel_pos >= 0 and par_pos > rel_pos) else c_norm
+        return "Emenda" if re.search(r"\bemenda\b", trecho) else "Proposição"
+
     # Passo 1: relator + parecer completo
     for c, date_val in all_cells_with_date:
         c_norm = _norm(c)
@@ -526,14 +532,17 @@ def _extract_pareceres(soup: BeautifulSoup) -> List[Dict]:
         relator  = _recover_original(c, relator_n)
         tipo     = _normalize_tipo(tipo_n)
         is_plen  = "plenario" in acao
+        objeto   = _get_objeto(c_norm, relator_n)
+        key      = (comissao_n, objeto)
 
-        existing = results_map.get(comissao_n)
+        existing = results_map.get(key)
         if not existing or (is_plen and not existing["is_plen"]):
-            results_map[comissao_n] = {
+            results_map[key] = {
                 "comissao":     comissao,
                 "relator":      relator,
                 "tipo_parecer": tipo,
                 "data":         date_val,
+                "objeto":       objeto,
                 "is_plen":      is_plen,
             }
 
@@ -545,19 +554,21 @@ def _extract_pareceres(soup: BeautifulSoup) -> List[Dict]:
             continue
         comissao_n = m.group("comissao").strip()
         relator_n  = m.group("relator").strip()
-        if comissao_n in results_map:
+        objeto     = _get_objeto(c_norm, relator_n)
+        key        = (comissao_n, objeto)
+        if key in results_map:
             continue  # já tem dado melhor do passo 1
         comissao = _recover_original(c, comissao_n)
         relator  = _recover_original(c, relator_n)
-        results_map[comissao_n] = {
+        results_map[key] = {
             "comissao":     comissao,
             "relator":      relator,
             "tipo_parecer": "Aguardando parecer",
             "data":         date_val,
+            "objeto":       objeto,
             "is_plen":      False,
         }
 
-    # Remove duplicatas da linha do tempo e ordena
     return [
         {k: v for k, v in r.items() if k != "is_plen"}
         for r in results_map.values()

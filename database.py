@@ -83,8 +83,14 @@ def init_db():
     except Exception:
         pass  # coluna já existe
 
+    # 2b) Migração: adiciona coluna objeto em pareceres (Proposição vs Emenda)
+    try:
+        conn.execute("ALTER TABLE pareceres ADD COLUMN objeto TEXT DEFAULT 'Proposição'")
+        conn.commit()
+    except Exception:
+        pass  # coluna já existe
 
-    # 3) Índices (agora a coluna legislatura já existe com certeza)
+    # 3) Índices (colunas já existem com certeza)
     conn.executescript("""
         CREATE INDEX IF NOT EXISTS idx_proj_tipo   ON projetos(tipo);
         CREATE INDEX IF NOT EXISTS idx_proj_leg    ON projetos(legislatura);
@@ -95,10 +101,11 @@ def init_db():
 
         CREATE UNIQUE INDEX IF NOT EXISTS uq_andamento
             ON andamento(projeto_id, COALESCE(data,''), descricao);
-
-        CREATE UNIQUE INDEX IF NOT EXISTS uq_pareceres
-            ON pareceres(projeto_id, COALESCE(comissao,''), COALESCE(data,''));
     """)
+    # Recria índice de pareceres incluindo objeto (separa Proposição de Emenda)
+    conn.execute("DROP INDEX IF EXISTS uq_pareceres")
+    conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS uq_pareceres
+        ON pareceres(projeto_id, COALESCE(comissao,''), COALESCE(objeto,''), COALESCE(data,''))""")
     conn.commit()
     conn.close()
 
@@ -198,14 +205,15 @@ def insert_parecer(projeto_id: int, data: Dict) -> bool:
     try:
         conn.execute(
             """INSERT OR IGNORE INTO pareceres
-               (projeto_id, comissao, relator, tipo_parecer, data)
-               VALUES (?, ?, ?, ?, ?)""",
+               (projeto_id, comissao, relator, tipo_parecer, data, objeto)
+               VALUES (?, ?, ?, ?, ?, ?)""",
             (
                 projeto_id,
                 data.get("comissao"),
                 data.get("relator"),
                 data.get("tipo_parecer"),
                 data.get("data"),
+                data.get("objeto", "Proposição"),
             ),
         )
         conn.commit()
@@ -398,7 +406,14 @@ def get_pareceres_from_andamento(projeto_id: int) -> List[Dict]:
                         return cand.strip()
         return target.upper()
 
-    results_map: dict = {}
+    def _get_objeto(desc_n: str, rel_n: str) -> str:
+        """Determina se o parecer é da Proposição ou das Emendas."""
+        rel_pos = desc_n.find(rel_n) if rel_n else -1
+        par_pos = desc_n.find("parecer:")
+        trecho  = desc_n[rel_pos:par_pos] if (rel_pos >= 0 and par_pos > rel_pos) else desc_n
+        return "Emenda" if _re.search(r"\bemenda\b", trecho) else "Proposição"
+
+    results_map: dict = {}  # chave: (comissao_n, objeto)
 
     # Passo 1: relator + parecer completo
     for row in rows:
@@ -416,11 +431,14 @@ def get_pareceres_from_andamento(projeto_id: int) -> List[Dict]:
         comissao = _recover(desc, com_n)
         relator  = _recover(desc, rel_n)
         data     = row["data"] or ""
-        existing = results_map.get(com_n)
+        objeto   = _get_objeto(desc_n, rel_n)
+        key      = (com_n, objeto)
+        existing = results_map.get(key)
         if not existing or (is_plen and not existing["is_plen"]):
-            results_map[com_n] = {
+            results_map[key] = {
                 "comissao": comissao, "relator": relator,
-                "tipo_parecer": tipo, "data": data, "is_plen": is_plen,
+                "tipo_parecer": tipo, "data": data,
+                "objeto": objeto, "is_plen": is_plen,
             }
 
     # Passo 2: apenas relator designado (sem parecer ainda)
@@ -430,16 +448,18 @@ def get_pareceres_from_andamento(projeto_id: int) -> List[Dict]:
         m = REL_RE.search(desc_n)
         if not m:
             continue
-        com_n = m.group("comissao").strip()
-        rel_n = m.group("relator").strip()
-        if com_n in results_map:
+        com_n  = m.group("comissao").strip()
+        rel_n  = m.group("relator").strip()
+        objeto = _get_objeto(desc_n, rel_n)
+        key    = (com_n, objeto)
+        if key in results_map:
             continue
         comissao = _recover(desc, com_n)
         relator  = _recover(desc, rel_n)
-        results_map[com_n] = {
+        results_map[key] = {
             "comissao": comissao, "relator": relator,
             "tipo_parecer": "Aguardando parecer", "data": row["data"] or "",
-            "is_plen": False,
+            "objeto": objeto, "is_plen": False,
         }
 
     return [
