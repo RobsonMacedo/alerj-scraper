@@ -1229,7 +1229,96 @@ _PAR_TIPO_RE = _re.compile(
 
 
 def _extrair_pareceres_bloco(linhas: list) -> list:
-    """Extrai pareceres (comissão, tipo, relator, objeto) de um bloco de linhas entre projetos."""
+    """Extrai pareceres (comissão, tipo, relator, objeto) de um bloco de linhas entre projetos.
+
+    Suporta dois formatos:
+    1. Inline: 'PARECERES DAS COMISSÕES: X, TIPO; Y, TIPO ...'
+               '(PENDENDO DE PARECERES DAS COMISSÕES: X; Y; ..., ÀS EMENDAS DE PLENÁRIO.)'
+    2. Linha-a-linha: cada comissão em sua própria linha com 'COMISSÃO ...'
+    """
+    texto = "\n".join(linhas)
+
+    # ── Formato 1: inline ────────────────────────────────────────────────────────
+    _PAR_INLINE_RE = _re.compile(
+        r"PARECERES?\s+DAS?\s+COMISS[ÕO][EÕ]S?\s*:([^\n(]+?)\.?\s*(?=\n|\(|$)",
+        _re.IGNORECASE,
+    )
+    _PEND_INLINE_RE = _re.compile(
+        r"\(\s*PEND\w+\s+DE\s+PARECERES?\s+DAS?\s+COMISS[ÕO][EÕ]S?\s*:\s*(.+?)\)",
+        _re.IGNORECASE | _re.DOTALL,
+    )
+    _TIPO_INLINE_RE = _re.compile(
+        r",\s*(PELA\s+CONSTITUCIONALIDADE|FAVOR[AÁ]VEL(?:\s+COM\b[^;,]*)?|CONTR[AÁ]RI[OA]|"
+        r"APROVAD[OA](?:\([AS]\))?|REJEITAD[OA](?:\([AS]\))?|PREJUDICAD[OA](?:\([AS]\))?|"
+        r"SEM\s+PARECER)\s*$",
+        _re.IGNORECASE,
+    )
+
+    m_prop = _PAR_INLINE_RE.search(texto)
+    m_pend = _PEND_INLINE_RE.search(texto)
+
+    if m_prop or m_pend:
+        resultados: list = []
+
+        # Extrai relatores em ordem posicional (para Proposição)
+        m_rel = _re.search(
+            r"RELATORES?\s*:\s*(.+?)\.?\s*(?=\n|$)",
+            texto, _re.IGNORECASE | _re.MULTILINE,
+        )
+        relatores_prop: list = []
+        if m_rel:
+            rel_txt = _re.sub(r"^\s*DEPUTAD\w+(?:\s+E\s+DEPUTAD\w+)?\s+", "", m_rel.group(1), flags=_re.IGNORECASE).strip()
+            # Substitui o último " E " (antes do último nome) por ","
+            rel_txt = _re.sub(r"\s+E\s+(?=[^,]+$)", ", ", rel_txt)
+            relatores_prop = [r.strip().rstrip(". ") for r in rel_txt.split(",") if r.strip()]
+
+        if m_prop:
+            itens = _re.split(r";\s*", m_prop.group(1).strip().rstrip("."))
+            for idx, item in enumerate(itens):
+                item = _re.sub(r"^[Ee]\s+", "", item).strip().rstrip(". ")
+                if not item:
+                    continue
+                m_t = _TIPO_INLINE_RE.search(item)
+                if m_t:
+                    tipo  = m_t.group(1).strip()
+                    frag  = item[:m_t.start()].strip()
+                else:
+                    tipo = ""
+                    frag = item
+                com_nome = ("COMISSÃO " + frag
+                            if not _re.match(r"COMISS[ÃA]O\b", frag, _re.IGNORECASE)
+                            else frag)
+                relator = relatores_prop[idx] if idx < len(relatores_prop) else ""
+                if len(com_nome) > 15:
+                    resultados.append({
+                        "comissao":     com_nome,
+                        "tipo_parecer": tipo,
+                        "relator":      relator,
+                        "objeto":       "Proposição",
+                    })
+
+        if m_pend:
+            itens_pend = _re.split(r";\s*", m_pend.group(1).strip())
+            for item in itens_pend:
+                # Remove sufixo "ÀS EMENDAS DE PLENÁRIO" e similar
+                item = _re.sub(r",?\s*À[S]?\s+EMENDAS?\b.*$", "", item, flags=_re.IGNORECASE).strip()
+                item = _re.sub(r"^[Ee]\s+", "", item).strip().rstrip(". ")
+                if not item:
+                    continue
+                com_nome = ("COMISSÃO " + item
+                            if not _re.match(r"COMISS[ÃA]O\b", item, _re.IGNORECASE)
+                            else item)
+                if len(com_nome) > 15:
+                    resultados.append({
+                        "comissao":     com_nome,
+                        "tipo_parecer": "Aguardando parecer",
+                        "relator":      "",
+                        "objeto":       "Emenda",
+                    })
+
+        return resultados
+
+    # ── Formato 2: linha-a-linha com "COMISSÃO ..." ─────────────────────────────
     resultados = []
     n = len(linhas)
     objeto_atual = "Proposição"
@@ -1237,8 +1326,7 @@ def _extrair_pareceres_bloco(linhas: list) -> list:
     while i < n:
         linha = linhas[i].strip()
 
-        # Detecta marcador de seção de emendas:
-        # "EMENDAS", "EMENDA(S):", "PARECERES ÀS EMENDAS", "PARECERES DAS EMENDAS" etc.
+        # Detecta marcador de seção de emendas
         if (not _re.search(r"\bCOMISS[ÃA]O\b", linha, _re.IGNORECASE)
                 and _re.search(r"\bEMENDA[S]?\b", linha, _re.IGNORECASE)
                 and _re.match(
@@ -1275,10 +1363,10 @@ def _extrair_pareceres_bloco(linhas: list) -> list:
 
         if len(com_nome) > 10:
             resultados.append({
-                "comissao":    com_nome,
+                "comissao":     com_nome,
                 "tipo_parecer": tipo_par or "",
-                "relator":     relator or "",
-                "objeto":      objeto_atual,
+                "relator":      relator or "",
+                "objeto":       objeto_atual,
             })
         i += 1
 
