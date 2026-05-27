@@ -1237,9 +1237,14 @@ def _extrair_pareceres_bloco(linhas: list) -> list:
     while i < n:
         linha = linhas[i].strip()
 
-        # Detecta marcador de seção de emendas (linha isolada como "EMENDA:" ou "EMENDAS")
-        if (_re.match(r"^EMENDA[S]?\s*[:\-]?\s*$", linha, _re.IGNORECASE)
-                and not _re.search(r"\bCOMISS[ÃA]O\b", linha, _re.IGNORECASE)):
+        # Detecta marcador de seção de emendas:
+        # "EMENDAS", "EMENDA(S):", "PARECERES ÀS EMENDAS", "PARECERES DAS EMENDAS" etc.
+        if (not _re.search(r"\bCOMISS[ÃA]O\b", linha, _re.IGNORECASE)
+                and _re.search(r"\bEMENDA[S]?\b", linha, _re.IGNORECASE)
+                and _re.match(
+                    r"^(?:PARECERES?\s+[ÀAa`]\w*\s+)?EMENDA[S]?\s*(?:\([Ss]\))?\s*[:\-]?\s*$",
+                    linha, _re.IGNORECASE,
+                )):
             objeto_atual = "Emenda"
             i += 1
             continue
@@ -1561,8 +1566,11 @@ def _comparar_pareceres_doc_db(pars_doc: list, pars_db: list) -> list:
                                     "diverge_tipo": False, "diverge_rel": False})
         return resultados
 
-    # Agrupa por objeto e emparelha dentro de cada grupo
-    objetos = sorted({p.get("objeto", "Proposição") for p in pars_doc + pars_db})
+    # Agrupa por objeto e emparelha dentro de cada grupo (Proposição sempre primeiro)
+    objetos = sorted(
+        {p.get("objeto", "Proposição") for p in pars_doc + pars_db},
+        key=lambda x: (x != "Proposição", x),
+    )
     all_results = []
     for obj in objetos:
         grp_doc = [p for p in pars_doc if p.get("objeto", "Proposição") == obj]
@@ -1849,32 +1857,39 @@ if _page == "📅 Pauta":
                                         "sem_db":  "❌ Não está no banco",
                                         "sem_doc": "📋 Só no banco",
                                     }
-                                    _tbl_rows = []
-                                    for _c in _comp:
-                                        _cpd  = _c.get("doc") or {}
-                                        _cpdb = _c.get("db") or {}
-                                        _cst  = _c.get("status", "")
-                                        _obj  = _c.get("objeto", "Proposição")
-                                        _com_nome = _cpd.get("comissao") or _cpdb.get("comissao") or "—"
-                                        _tp_banco = _cpdb.get("tipo_parecer") or ""
-                                        _aguard   = _tp_banco in ("Aguardando parecer", "", None)
-                                        if _cst == "sem_doc" and _aguard:
-                                            _st_lbl = "⏳ Pendente"
-                                        else:
-                                            _st_lbl = _STATUS_LABEL.get(_cst, "—")
-                                        _tbl_rows.append({
-                                            "Objeto":           _obj,
-                                            "Comissão":         _com_nome,
-                                            "Parecer (doc)":    _cpd.get("tipo_parecer") or "—",
-                                            "Relator (doc)":    _cpd.get("relator")      or "—",
-                                            "Parecer (banco)":  _icone_parecer(_tp_banco) + " " + (_tp_banco or "—"),
-                                            "Relator (banco)":  _cpdb.get("relator")     or "—",
-                                            "Data (banco)":     _cpdb.get("data")        or "—",
-                                            "Status":           _st_lbl,
-                                        })
-                                    if _tbl_rows:
-                                        _df_par = pd.DataFrame(_tbl_rows)
-                                        st.dataframe(_df_par, use_container_width=True, hide_index=True)
+
+                                    # Exibe uma tabela por objeto (Proposição, depois Emenda)
+                                    _objetos_exib = sorted(
+                                        {c.get("objeto", "Proposição") for c in _comp},
+                                        key=lambda x: (x != "Proposição", x),
+                                    )
+                                    for _obj_ex in _objetos_exib:
+                                        _grp_ex = [c for c in _comp if c.get("objeto", "Proposição") == _obj_ex]
+                                        st.markdown(f"**📌 {_obj_ex}**")
+                                        _tbl_rows = []
+                                        for _c in _grp_ex:
+                                            _cpd  = _c.get("doc") or {}
+                                            _cpdb = _c.get("db") or {}
+                                            _cst  = _c.get("status", "")
+                                            _com_nome = _cpd.get("comissao") or _cpdb.get("comissao") or "—"
+                                            _tp_banco = _cpdb.get("tipo_parecer") or ""
+                                            _aguard   = _tp_banco in ("Aguardando parecer", "", None)
+                                            if _cst == "sem_doc" and _aguard:
+                                                _st_lbl = "⏳ Pendente"
+                                            else:
+                                                _st_lbl = _STATUS_LABEL.get(_cst, "—")
+                                            _tbl_rows.append({
+                                                "Comissão":         _com_nome,
+                                                "Parecer (doc)":    _cpd.get("tipo_parecer") or "—",
+                                                "Relator (doc)":    _cpd.get("relator")      or "—",
+                                                "Parecer (banco)":  _icone_parecer(_tp_banco) + " " + (_tp_banco or "—"),
+                                                "Relator (banco)":  _cpdb.get("relator")     or "—",
+                                                "Data (banco)":     _cpdb.get("data")        or "—",
+                                                "Status":           _st_lbl,
+                                            })
+                                        if _tbl_rows:
+                                            _df_par = pd.DataFrame(_tbl_rows)
+                                            st.dataframe(_df_par, use_container_width=True, hide_index=True)
 
                                     # Relator do documento (conferência global, só se sem comp. por comissão)
                                     _rel_doc_p = _r["p"].get("relator_doc")
