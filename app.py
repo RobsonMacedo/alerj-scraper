@@ -1828,20 +1828,24 @@ if _page == "📅 Pauta":
                         1 for r in _relatorio
                         if r["db"] and r["db"].get("_numero_encontrado", r["p"]["numero"]) != r["p"]["numero"]
                     )
-                    _par_div = sum(
-                        1 for r in _relatorio
-                        if any(c.get("status") in ("diverge", "sem_db") for c in r.get("parecer_comp", []))
-                    )
+                    def _par_diverge(r):
+                        """True somente quando o documento TEM pareceres e há divergência com o banco."""
+                        return bool(r.get("pareceres_doc")) and any(
+                            c.get("status") in ("diverge", "sem_db")
+                            for c in r.get("parecer_comp", [])
+                        )
+
+                    _par_div = sum(1 for r in _relatorio if _par_diverge(r))
                     _div     = sum(1 for r in _relatorio if r["db"] and (
                         r["status_autor"] == "diverge" or
                         r["status_ementa"] == "diverge" or
-                        any(c.get("status") in ("diverge", "sem_db") for c in r.get("parecer_comp", []))
+                        _par_diverge(r)
                     ))
                     _rel_div = sum(1 for r in _relatorio if r.get("status_relator") == "diverge")
                     _nao_enc = sum(1 for r in _relatorio if not r["db"])
                     _ok      = sum(1 for r in _relatorio if r["db"] and
                         r["status_autor"] != "diverge" and r["status_ementa"] != "diverge" and
-                        not any(c.get("status") in ("diverge", "sem_db") for c in r.get("parecer_comp", [])) and
+                        not _par_diverge(r) and
                         r["db"].get("_numero_encontrado", r["p"]["numero"]) == r["p"]["numero"])
 
                     _s1, _s2, _s3, _s4, _s5, _s6, _s7 = st.columns(7)
@@ -1866,7 +1870,7 @@ if _page == "📅 Pauta":
                         _tem_diverge     = "diverge" in (_r["status_autor"], _r["status_ementa"])
                         _tem_pont        = "ok_pont" in (_r["status_autor"], _r["status_ementa"])
                         _tem_rel_div     = _r.get("status_relator") == "diverge"
-                        _tem_par_div     = any(c.get("status") in ("diverge", "sem_db") for c in _r.get("parecer_comp", []))
+                        _tem_par_div     = _par_diverge(_r)
                         # Verifica se houve fallback para o projeto base (substitutivo não está no banco)
                         _num_encontrado  = (_db or {}).get("_numero_encontrado", _p["numero"])
                         _eh_substitutivo = _db is not None and _num_encontrado != _p["numero"]
@@ -1939,11 +1943,13 @@ if _page == "📅 Pauta":
                                     st.markdown("---")
                                     st.markdown("**📋 Comissões e Pareceres**")
 
+                                    # Quando o documento não traz pareceres, tudo é informativo
+                                    _doc_tem_pars = bool(_pars_doc)
                                     _STATUS_LABEL = {
                                         "ok":      "✅ Conferido",
                                         "diverge": "❌ Divergência",
-                                        "sem_db":  "❌ Não está no banco",
-                                        "sem_doc": "📋 Só no banco",
+                                        "sem_db":  "❌ Não está no banco" if _doc_tem_pars else "—",
+                                        "sem_doc": "📋 Só no banco"       if _doc_tem_pars else "ℹ️ Banco",
                                     }
 
                                     # Exibe uma tabela por objeto (Proposição, depois Emenda)
