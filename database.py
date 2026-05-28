@@ -102,24 +102,38 @@ def init_db():
         CREATE UNIQUE INDEX IF NOT EXISTS uq_andamento
             ON andamento(projeto_id, COALESCE(data,''), descricao);
     """)
-    # Recria índice de pareceres incluindo objeto (separa Proposição de Emenda)
-    # Remove duplicatas antes de criar o índice único
-    conn.execute("""
-        DELETE FROM pareceres
-        WHERE id NOT IN (
-            SELECT MAX(id)
-            FROM pareceres
-            GROUP BY projeto_id,
-                     COALESCE(comissao,''),
-                     COALESCE(objeto,''),
-                     COALESCE(data,'')
-        )
-    """)
-    conn.commit()
-    conn.execute("DROP INDEX IF EXISTS uq_pareceres")
-    conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS uq_pareceres
-        ON pareceres(projeto_id, COALESCE(comissao,''), COALESCE(objeto,''), COALESCE(data,''))""")
-    conn.commit()
+    # Garante índice único de pareceres com objeto.
+    # Só recria se o índice não existir ou não incluir 'objeto' (migração única).
+    _idx = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='index' AND name='uq_pareceres'"
+    ).fetchone()
+    _needs_recreate = _idx is None or "objeto" not in (_idx[0] or "").lower()
+
+    if _needs_recreate:
+        # Transação exclusiva: impede inserções concorrentes do scraper durante a janela
+        # entre DROP INDEX e CREATE UNIQUE INDEX.
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute("DROP INDEX IF EXISTS uq_pareceres")
+            conn.execute("""
+                DELETE FROM pareceres
+                WHERE id NOT IN (
+                    SELECT MAX(id)
+                    FROM pareceres
+                    GROUP BY projeto_id,
+                             COALESCE(comissao,''),
+                             COALESCE(objeto,''),
+                             COALESCE(data,'')
+                )
+            """)
+            conn.execute("""
+                CREATE UNIQUE INDEX uq_pareceres
+                ON pareceres(projeto_id, COALESCE(comissao,''), COALESCE(objeto,''), COALESCE(data,''))
+            """)
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
     conn.close()
 
 
