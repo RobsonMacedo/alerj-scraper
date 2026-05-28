@@ -1676,7 +1676,9 @@ def _comparar_pareceres_doc_db(pars_doc: list, pars_db: list) -> list:
                     melhor_score = sc
                     melhor_idx   = j
             if melhor_score < 0.35 or melhor_idx < 0:
-                resultados.append({"doc": pd, "db": None, "status": "sem_db",
+                _t_sem = _norm_tipo_parecer(pd.get("tipo_parecer", ""))
+                _st_sem = "aguardando" if _t_sem == "AGUARDANDO" else "sem_db"
+                resultados.append({"doc": pd, "db": None, "status": _st_sem,
                                     "diverge_tipo": False, "diverge_rel": False})
                 continue
             pdb = grupo_db[melhor_idx]
@@ -1988,10 +1990,11 @@ if _page == "📅 Pauta":
                                     # Quando o documento não traz pareceres, tudo é informativo
                                     _doc_tem_pars = bool(_pars_doc)
                                     _STATUS_LABEL = {
-                                        "ok":      "✅ Conferido",
-                                        "diverge": "❌ Divergência",
-                                        "sem_db":  "❌ Não está no banco" if _doc_tem_pars else "—",
-                                        "sem_doc": "📋 Só no banco"       if _doc_tem_pars else "ℹ️ Banco",
+                                        "ok":         "✅ Conferido",
+                                        "diverge":    "❌ Divergência",
+                                        "sem_db":     "❌ Não está no banco" if _doc_tem_pars else "—",
+                                        "aguardando": "⏳ Aguardando parecer",
+                                        "sem_doc":    "📋 Só no banco"       if _doc_tem_pars else "ℹ️ Banco",
                                     }
 
                                     # Exibe uma tabela por objeto (Proposição, depois Emenda)
