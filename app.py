@@ -1240,15 +1240,20 @@ def _extrair_pareceres_bloco(linhas: list) -> list:
 
     # ── Formato 1: inline ────────────────────────────────────────────────────────
     _PAR_INLINE_RE = _re.compile(
-        r"PARECERES?\s+DAS?\s+COMISS[ÕO][EÕ]S?\s*:([^\n(]+?)\.?\s*(?=\n|\(|$)",
-        _re.IGNORECASE,
+        r"^PARECERES?\s+DAS?\s+COMISS[ÕO][EÕ]S?\s*:([^\n(]+?)\.?\s*$",
+        _re.IGNORECASE | _re.MULTILINE,
     )
     _PEND_INLINE_RE = _re.compile(
         r"\(\s*PEND\w+\s+DE\s+PARECERES?\s+DAS?\s+COMISS[ÕO][EÕ]S?\s*:\s*(.+?)\)",
         _re.IGNORECASE | _re.DOTALL,
     )
+    _PAR_EMENDA_RE = _re.compile(
+        r"^PARECERES?,?\s+(?:ÀS?\s+)?EMENDAS?\s+(?:DE\s+)?PLEN[AÁ]RIO,?\s+DAS?\s+COMISS[ÕO][EÕ]S?\s*:\s*([^\n]+?)\.?\s*$",
+        _re.IGNORECASE | _re.MULTILINE,
+    )
     _TIPO_INLINE_RE = _re.compile(
-        r",\s*(PELA\s+CONSTITUCIONALIDADE|FAVOR[AÁ]VEL(?:\s+COM\b[^;,]*)?|CONTR[AÁ]RI[OA]|"
+        r",\s*(PELA\s+(?:CONSTITUCIONALIDADE|LEGALIDADE|INCONSTITUCIONALIDADE)|"
+        r"FAVOR[AÁ]VEL(?:\s+COM\b[^;,]*)?|CONTR[AÁ]RI[OA]|"
         r"APROVAD[OA](?:\([AS]\))?|REJEITAD[OA](?:\([AS]\))?|PREJUDICAD[OA](?:\([AS]\))?|"
         r"SEM\s+PARECER)\s*$",
         _re.IGNORECASE,
@@ -1256,8 +1261,9 @@ def _extrair_pareceres_bloco(linhas: list) -> list:
 
     m_prop = _PAR_INLINE_RE.search(texto)
     m_pend = _PEND_INLINE_RE.search(texto)
+    m_emenda = _PAR_EMENDA_RE.search(texto)
 
-    if m_prop or m_pend:
+    if m_prop or m_pend or m_emenda:
         resultados: list = []
 
         # Extrai relatores em ordem posicional (para Proposição)
@@ -1313,6 +1319,42 @@ def _extrair_pareceres_bloco(linhas: list) -> list:
                         "comissao":     com_nome,
                         "tipo_parecer": "Aguardando parecer",
                         "relator":      "",
+                        "objeto":       "Emenda",
+                    })
+
+        if m_emenda:
+            # Extrai relatores de emendas — procura segunda ocorrência de RELATORES ou reutiliza
+            m_rel_em = _re.search(
+                r"RELATORES?\s*(?:DAS?\s+EMENDAS?)?\s*:\s*(.+?)\.?\s*(?=\n|$)",
+                texto, _re.IGNORECASE | _re.MULTILINE,
+            )
+            relatores_em: list = []
+            if m_rel_em:
+                rel_txt = _re.sub(r"^\s*DEPUTAD\w+(?:\s+E\s+DEPUTAD\w+)?\s+", "", m_rel_em.group(1), flags=_re.IGNORECASE).strip()
+                rel_txt = _re.sub(r"\s+E\s+(?=[^,]+$)", ", ", rel_txt)
+                relatores_em = [r.strip().rstrip(". ") for r in rel_txt.split(",") if r.strip()]
+
+            itens_em = _re.split(r";\s*", m_emenda.group(1).strip().rstrip("."))
+            for idx, item in enumerate(itens_em):
+                item = _re.sub(r"^[Ee]\s+", "", item).strip().rstrip(". ")
+                if not item:
+                    continue
+                m_t = _TIPO_INLINE_RE.search(item)
+                if m_t:
+                    tipo = m_t.group(1).strip()
+                    frag = item[:m_t.start()].strip()
+                else:
+                    tipo = ""
+                    frag = item
+                com_nome = ("COMISSÃO " + frag
+                            if not _re.match(r"COMISS[ÃA]O\b", frag, _re.IGNORECASE)
+                            else frag)
+                relator = relatores_em[idx] if idx < len(relatores_em) else ""
+                if len(com_nome) > 15:
+                    resultados.append({
+                        "comissao":     com_nome,
+                        "tipo_parecer": tipo,
+                        "relator":      relator,
                         "objeto":       "Emenda",
                     })
 
