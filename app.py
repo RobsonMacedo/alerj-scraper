@@ -1639,7 +1639,7 @@ def _match_comissao_score(a: str, b: str) -> float:
 
 
 def _norm_tipo_parecer(s: str) -> str:
-    s = _norm_cmp(s or "")
+    s = _so_alfanum(s or "")
     if "FAVORAVEL" in s or "APROVADO" in s or "APROVADA" in s:
         return "FAVORAVEL"
     if "CONTRARIO" in s or "REJEITADO" in s or "REJEITADA" in s:
