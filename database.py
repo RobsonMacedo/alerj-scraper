@@ -103,6 +103,19 @@ def init_db():
             ON andamento(projeto_id, COALESCE(data,''), descricao);
     """)
     # Recria índice de pareceres incluindo objeto (separa Proposição de Emenda)
+    # Remove duplicatas antes de criar o índice único
+    conn.execute("""
+        DELETE FROM pareceres
+        WHERE id NOT IN (
+            SELECT MAX(id)
+            FROM pareceres
+            GROUP BY projeto_id,
+                     COALESCE(comissao,''),
+                     COALESCE(objeto,''),
+                     COALESCE(data,'')
+        )
+    """)
+    conn.commit()
     conn.execute("DROP INDEX IF EXISTS uq_pareceres")
     conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS uq_pareceres
         ON pareceres(projeto_id, COALESCE(comissao,''), COALESCE(objeto,''), COALESCE(data,''))""")
