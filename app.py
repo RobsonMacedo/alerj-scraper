@@ -1252,10 +1252,10 @@ def _extrair_pareceres_bloco(linhas: list) -> list:
         _re.IGNORECASE | _re.MULTILINE,
     )
     _TIPO_INLINE_RE = _re.compile(
-        r",\s*(PELA\s+(?:CONSTITUCIONALIDADE|LEGALIDADE|INCONSTITUCIONALIDADE)|"
-        r"FAVOR[AÁ]VEL(?:\s+COM\b[^;,]*)?|CONTR[AÁ]RI[OA]|"
+        r",\s*((?:PELA\s+(?:CONSTITUCIONALIDADE|LEGALIDADE|INCONSTITUCIONALIDADE)|"
+        r"FAVOR[AÁ]VEL|CONTR[AÁ]RI[OA]|"
         r"APROVAD[OA](?:\([AS]\))?|REJEITAD[OA](?:\([AS]\))?|PREJUDICAD[OA](?:\([AS]\))?|"
-        r"SEM\s+PARECER)\s*$",
+        r"SEM\s+PARECER)[^;]*)",
         _re.IGNORECASE,
     )
 
